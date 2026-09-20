@@ -48,7 +48,6 @@ fun DashboardScreen(viewModel: WorkViewModel) {
     // Aggregate monthly advance amounts from filtered records
     val monthlyAdvances = remember(records) {
         records.groupBy { record ->
-            // Extracts "Mmm-YY" from "DD-Mmm-YY" (e.g. "Sep-26")
             val parts = record.date.split("-")
             if (parts.size == 3) "${parts[1]}-${parts[2]}" else record.date
         }.map { (month, recList) ->
@@ -293,7 +292,6 @@ fun MonthlyAdvanceBarChart(data: List<MonthlyAdvance>) {
 
         Spacer(modifier = Modifier.height(6.dp))
 
-        // Month labels and values under bars
         Row(
             modifier = Modifier.fillMaxWidth(),
             horizontalArrangement = Arrangement.SpaceBetween
@@ -314,6 +312,86 @@ fun MonthlyAdvanceBarChart(data: List<MonthlyAdvance>) {
                         style = MaterialTheme.typography.labelSmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant
                     )
+                }
+            }
+        }
+    }
+}
+
+@Composable
+fun RecordItemCard(record: WorkRecord, showEmployee: Boolean) {
+    val context = LocalContext.current
+
+    Card(
+        modifier = Modifier.fillMaxWidth(),
+        elevation = CardDefaults.cardElevation(defaultElevation = 2.dp)
+    ) {
+        Column(modifier = Modifier.padding(14.dp)) {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Text(
+                    text = "${record.workId} • ${record.date}",
+                    style = MaterialTheme.typography.labelLarge,
+                    color = MaterialTheme.colorScheme.primary,
+                    fontWeight = FontWeight.Bold
+                )
+                AssistChip(
+                    onClick = {},
+                    label = { Text("Visits: ${record.visitCount}") }
+                )
+            }
+
+            if (showEmployee) {
+                Text(
+                    text = "Emp: ${record.employeeName}",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.tertiary,
+                    fontWeight = FontWeight.Bold
+                )
+            }
+
+            Text(
+                text = record.customerName,
+                style = MaterialTheme.typography.titleMedium,
+                fontWeight = FontWeight.SemiBold
+            )
+
+            Text(
+                text = "${record.activity} | ${record.location}",
+                style = MaterialTheme.typography.bodyMedium,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+
+            HorizontalDivider(modifier = Modifier.padding(vertical = 8.dp))
+
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Column {
+                    Text(
+                        text = "Total: ₹${record.totalAmount}  |  Adv: ₹${record.advanceAmount}",
+                        style = MaterialTheme.typography.bodySmall
+                    )
+                    Text(
+                        text = "Pending: ₹${record.pendingAmount}",
+                        style = MaterialTheme.typography.bodyMedium,
+                        fontWeight = FontWeight.Bold,
+                        color = if (record.pendingAmount > 0) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.primary
+                    )
+                }
+
+                IconButton(
+                    onClick = {
+                        val intent = Intent(Intent.ACTION_DIAL, Uri.parse("tel:${record.phoneNumber}"))
+                        context.startActivity(intent)
+                    }
+                ) {
+                    Icon(Icons.Default.Call, contentDescription = "Call Customer", tint = MaterialTheme.colorScheme.primary)
                 }
             }
         }
