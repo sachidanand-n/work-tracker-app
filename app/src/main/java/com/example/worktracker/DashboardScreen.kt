@@ -18,10 +18,10 @@ import androidx.compose.ui.unit.dp
 
 @Composable
 fun DashboardScreen(viewModel: WorkViewModel) {
-    val records by viewModel.filteredRecords.collectAsState(initial = emptyList())
+    val records by viewModel.visibleRecords.collectAsState(initial = emptyList())
     val search by viewModel.searchQuery.collectAsState()
-    val filterLoc by viewModel.filterLocation.collectAsState()
-    val filterAct by viewModel.filterActivity.collectAsState()
+    val role by viewModel.currentUserRole.collectAsState()
+    val loggedInEmp by viewModel.loggedInEmployee.collectAsState()
 
     val totalRevenue = records.sumOf { it.totalAmount }
     val totalCollected = records.sumOf { it.advanceAmount }
@@ -32,11 +32,24 @@ fun DashboardScreen(viewModel: WorkViewModel) {
             .fillMaxSize()
             .padding(16.dp)
     ) {
-        Text(
-            text = "Analytics Dashboard",
-            style = MaterialTheme.typography.headlineMedium,
-            fontWeight = FontWeight.Bold
-        )
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Column {
+                Text(
+                    text = if (role == UserRole.ADMIN) "Admin Dashboard (All Data)" else "Dashboard ($loggedInEmp)",
+                    style = MaterialTheme.typography.titleLarge,
+                    fontWeight = FontWeight.Bold
+                )
+                Text(
+                    text = if (role == UserRole.ADMIN) "Full company-wide view" else "Showing only your entries",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+            }
+        }
 
         Spacer(modifier = Modifier.height(12.dp))
 
@@ -44,34 +57,10 @@ fun DashboardScreen(viewModel: WorkViewModel) {
             value = search,
             onValueChange = { viewModel.searchQuery.value = it },
             modifier = Modifier.fillMaxWidth(),
-            placeholder = { Text("Search by customer, phone, or work ID...") },
+            placeholder = { Text("Search customer, phone, location...") },
             leadingIcon = { Icon(Icons.Default.Search, contentDescription = null) },
             singleLine = true
         )
-
-        Spacer(modifier = Modifier.height(8.dp))
-
-        Row(
-            modifier = Modifier.fillMaxWidth(),
-            horizontalArrangement = Arrangement.spacedBy(8.dp)
-        ) {
-            Box(modifier = Modifier.weight(1f)) {
-                AppDropdown(
-                    label = "Location",
-                    options = listOf("All") + DropdownOptions.locations,
-                    selectedOption = filterLoc,
-                    onOptionSelected = { viewModel.filterLocation.value = it }
-                )
-            }
-            Box(modifier = Modifier.weight(1f)) {
-                AppDropdown(
-                    label = "Activity",
-                    options = listOf("All") + DropdownOptions.activities,
-                    selectedOption = filterAct,
-                    onOptionSelected = { viewModel.filterActivity.value = it }
-                )
-            }
-        }
 
         Spacer(modifier = Modifier.height(12.dp))
 
@@ -87,7 +76,7 @@ fun DashboardScreen(viewModel: WorkViewModel) {
         Spacer(modifier = Modifier.height(12.dp))
 
         Text(
-            text = "Records (${records.size})",
+            text = "Entries (${records.size})",
             style = MaterialTheme.typography.titleMedium,
             fontWeight = FontWeight.SemiBold
         )
@@ -99,7 +88,7 @@ fun DashboardScreen(viewModel: WorkViewModel) {
             verticalArrangement = Arrangement.spacedBy(10.dp)
         ) {
             items(records, key = { it.id }) { record ->
-                RecordItemCard(record = record)
+                RecordItemCard(record = record, showEmployee = role == UserRole.ADMIN)
             }
         }
     }
@@ -116,7 +105,7 @@ fun MetricCard(title: String, value: String, modifier: Modifier = Modifier) {
 }
 
 @Composable
-fun RecordItemCard(record: WorkRecord) {
+fun RecordItemCard(record: WorkRecord, showEmployee: Boolean) {
     val context = LocalContext.current
 
     Card(
@@ -141,9 +130,18 @@ fun RecordItemCard(record: WorkRecord) {
                 )
             }
 
+            if (showEmployee) {
+                Text(
+                    text = "Emp: ${record.employeeName}",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.tertiary,
+                    fontWeight = FontWeight.Bold
+                )
+            }
+
             Text(
                 text = record.customerName,
-                style = MaterialTheme.typography.titleLarge,
+                style = MaterialTheme.typography.titleMedium,
                 fontWeight = FontWeight.SemiBold
             )
 
@@ -153,7 +151,7 @@ fun RecordItemCard(record: WorkRecord) {
                 color = MaterialTheme.colorScheme.onSurfaceVariant
             )
 
-            Divider(modifier = Modifier.padding(vertical = 8.dp))
+            HorizontalDivider(modifier = Modifier.padding(vertical = 8.dp))
 
             Row(
                 modifier = Modifier.fillMaxWidth(),
