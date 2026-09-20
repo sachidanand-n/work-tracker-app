@@ -25,23 +25,25 @@ data class EntryFormState(
     val phoneNumber: String = ""
 )
 
+data class MonthlyAdvance(
+    val monthYear: String, // e.g., "Sep-26"
+    val totalAdvance: Double
+)
+
 class WorkViewModel : ViewModel() {
 
-    // Authentication & Role
     private val _currentUserRole = MutableStateFlow(UserRole.NONE)
     val currentUserRole: StateFlow<UserRole> = _currentUserRole.asStateFlow()
 
     private val _loggedInEmployee = MutableStateFlow("")
     val loggedInEmployee: StateFlow<String> = _loggedInEmployee.asStateFlow()
 
-    // Master data managed by Admin
     val masterEmployees = MutableStateFlow(listOf("Ramesh Kumar", "Priya Sharma", "Murugan S", "Anand Raj"))
     val masterWorkIds = MutableStateFlow(listOf("WRK-1001", "WRK-1002", "WRK-1003", "WRK-1004"))
     val masterActivities = MutableStateFlow(listOf("Site Survey", "New Installation", "Maintenance", "Emergency Repair", "Audit"))
     val masterPincodes = MutableStateFlow(indiaPincodeMap.map { "${it.key} - ${it.value}" })
     val visitCounts = listOf("1", "2", "3", "4", "5+")
 
-    // Generate past 30 days in DD-MMM-YY format
     val pastDates: List<String> = generateDatesList()
 
     private val _records = MutableStateFlow<List<WorkRecord>>(sampleInitialData())
@@ -50,33 +52,53 @@ class WorkViewModel : ViewModel() {
     private val _formState = MutableStateFlow(EntryFormState())
     val formState: StateFlow<EntryFormState> = _formState.asStateFlow()
 
+    // Dashboard Search & Filters
     val searchQuery = MutableStateFlow("")
+    val selectedLocationFilter = MutableStateFlow("All")
+    val selectedActivityFilter = MutableStateFlow("All")
+    val selectedWorkIdFilter = MutableStateFlow("All")
+    val selectedEmployeeFilter = MutableStateFlow("All") // Admin-only filter
 
     init {
         resetFormToDefaults()
     }
 
-    // Role-filtered records: User views only their records; Admin views all
-    val visibleRecords = combine(_records, _currentUserRole, _loggedInEmployee, searchQuery) { list, role, employee, query ->
-        val roleFiltered = if (role == UserRole.USER) {
-            list.filter { it.employeeName.equals(employee, ignoreCase = true) }
-        } else {
-            list
+    // Role and Multi-Filter Reactive Flow
+    val visibleRecords = combine(
+        _records,
+        _currentUserRole,
+        _loggedInEmployee,
+        searchQuery,
+        selectedLocationFilter
+    ) { recs, role, emp, query, loc ->
+        FilterStateIntermediate(recs, role, emp, query, loc)
+    }.combine(
+        combine(selectedActivityFilter, selectedWorkIdFilter, selectedEmployeeFilter) { act, work, targetEmp ->
+            Triple(act, work, targetEmp)
         }
-        if (query.isBlank()) {
-            roleFiltered
+    ) { inter, (act, work, targetEmp) ->
+        val roleFiltered = if (inter.role == UserRole.USER) {
+            inter.recs.filter { it.employeeName.equals(inter.emp, ignoreCase = true) }
         } else {
-            roleFiltered.filter {
-                it.customerName.contains(query, ignoreCase = true) ||
-                it.phoneNumber.contains(query) ||
-                it.workId.contains(query, ignoreCase = true) ||
-                it.location.contains(query, ignoreCase = true) ||
-                it.employeeName.contains(query, ignoreCase = true)
-            }
+            if (targetEmp == "All") inter.recs else inter.recs.filter { it.employeeName == targetEmp }
+        }
+
+        roleFiltered.filter { record ->
+            val matchLoc = inter.loc == "All" || record.location == inter.loc
+            val matchAct = act == "All" || record.activity == act
+            val matchWork = work == "All" || record.workId == work
+            val matchQuery = inter.query.isBlank() ||
+                record.customerName.contains(inter.query, ignoreCase = true) ||
+                record.phoneNumber.contains(inter.query) ||
+                record.workId.contains(inter.query, ignoreCase = true) ||
+                record.location.contains(inter.query, ignoreCase = true) ||
+                record.employeeName.contains(inter.query, ignoreCase = true)
+
+            matchLoc && matchAct && matchWork && matchQuery
         }
     }
 
-    // Authentication actions
+    // Auth actions
     fun loginAsUser(employeeName: String) {
         _loggedInEmployee.value = employeeName
         _currentUserRole.value = UserRole.USER
@@ -88,9 +110,7 @@ class WorkViewModel : ViewModel() {
             _currentUserRole.value = UserRole.ADMIN
             _loggedInEmployee.value = "Admin"
             true
-        } else {
-            false
-        }
+        } else false
     }
 
     fun logout() {
@@ -99,7 +119,14 @@ class WorkViewModel : ViewModel() {
         resetFormToDefaults()
     }
 
-    // Admin master management
+    fun resetFilters() {
+        searchQuery.value = ""
+        selectedLocationFilter.value = "All"
+        selectedActivityFilter.value = "All"
+        selectedWorkIdFilter.value = "All"
+        selectedEmployeeFilter.value = "All"
+    }
+
     fun addMasterEmployee(name: String) {
         if (name.isNotBlank() && !masterEmployees.value.contains(name.trim())) {
             masterEmployees.value = masterEmployees.value + name.trim()
@@ -128,7 +155,6 @@ class WorkViewModel : ViewModel() {
 
     fun saveRecord(): Boolean {
         val s = _formState.value
-        // Validation: 10 digits phone number & mandatory fields
         if (s.customerName.isBlank() || s.phoneNumber.length != 10 || !s.phoneNumber.all { it.isDigit() }) {
             return false
         }
@@ -165,18 +191,28 @@ class WorkViewModel : ViewModel() {
     }
 }
 
+private data class FilterStateIntermediate(
+    val recs: List<WorkRecord>,
+    val role: UserRole,
+    val emp: String,
+    val query: String,
+    val loc: String
+)
+
 private fun generateDatesList(): List<String> {
     val dates = mutableListOf<String>()
     val formatter = SimpleDateFormat("dd-MMM-yy", Locale.ENGLISH)
     val calendar = Calendar.getInstance()
     for (i in 0..30) {
         dates.add(formatter.format(calendar.time))
-        calendar.add(Calendar.DAY_OF_YEAR, -1) // Past dates
+        calendar.add(Calendar.DAY_OF_YEAR, -1)
     }
     return dates
 }
 
 private fun sampleInitialData() = listOf(
-    WorkRecord(1, "Ramesh Kumar", "WRK-1001", "20-Sep-26", "New Installation", "Tex Styles Ltd", "641601 - Tirupur", "2", 12000.0, 4000.0, 8000.0, "9876543210"),
-    WorkRecord(2, "Priya Sharma", "WRK-1002", "19-Sep-26", "Maintenance", "Apex Knits", "641001 - Coimbatore South", "1", 5000.0, 5000.0, 0.0, "9123456780")
+    WorkRecord(1, "Ramesh Kumar", "WRK-1001", "20-Sep-26", "New Installation", "Tex Styles Ltd", "641601 - Tirupur", "2", 15000.0, 7000.0, 8000.0, "9876543210"),
+    WorkRecord(2, "Ramesh Kumar", "WRK-1002", "14-Aug-26", "Maintenance", "Knitwear Hub", "641602 - Tirupur North", "1", 9000.0, 4500.0, 4500.0, "9876543210"),
+    WorkRecord(3, "Priya Sharma", "WRK-1003", "18-Sep-26", "Audit", "Apex Knits", "641001 - Coimbatore South", "1", 8500.0, 5000.0, 3500.0, "9123456780"),
+    WorkRecord(4, "Priya Sharma", "WRK-1004", "05-Jul-26", "Emergency Repair", "Velan Motors", "641018 - Coimbatore Central", "3", 12000.0, 6000.0, 6000.0, "9123456780")
 )
