@@ -3,6 +3,7 @@ package com.example.worktracker
 import androidx.lifecycle.ViewModel
 import com.google.firebase.firestore.FirebaseFirestore
 import com.google.firebase.firestore.Query
+import com.google.firebase.firestore.SetOptions
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -11,66 +12,39 @@ import java.text.SimpleDateFormat
 import java.util.Calendar
 import java.util.Locale
 
-enum class UserRole { NONE, USER, ADMIN }
-
-data class EntryFormState(
-    val employeeName: String = "",
-    val workId: String = "",
-    val date: String = "",
-    val activity: String = "",
-    val customerName: String = "",
-    val location: String = "",
-    val visitCount: String = "1",
-    val totalAmount: String = "",
-    val advanceAmount: String = "",
-    val pendingAmount: Double = 0.0,
-    val phoneNumber: String = ""
-)
-
-data class MonthlyAdvance(
-    val monthYear: String,
-    val totalAdvance: Double
-)
-
-private data class FilterStateIntermediate(
-    val recs: List<WorkRecord>,
-    val role: UserRole,
-    val emp: String,
-    val query: String,
-    val loc: String
-)
-
 class WorkViewModel : ViewModel() {
 
-    // Cloud Database Reference Points
     private val db = FirebaseFirestore.getInstance()
     private val recordsCollection = db.collection("work_records")
     private val masterDoc = db.collection("app_config").document("master_data")
 
-    // Role & Authentication State
+    // Authentication & Role
     private val _currentUserRole = MutableStateFlow(UserRole.NONE)
     val currentUserRole: StateFlow<UserRole> = _currentUserRole.asStateFlow()
 
     private val _loggedInEmployee = MutableStateFlow("")
     val loggedInEmployee: StateFlow<String> = _loggedInEmployee.asStateFlow()
 
-    // Master Dropdown Lists - Synced via Cloud
-    val masterEmployees = MutableStateFlow<List<String>>(emptyList())
-    val masterWorkIds = MutableStateFlow<List<String>>(emptyList())
-    val masterActivities = MutableStateFlow<List<String>>(emptyList())
+    // Master Data States
+    val masterEmployees = MutableStateFlow<List<String>>(listOf("Ramesh Kumar", "Priya Sharma", "Murugan S", "Anand Raj"))
+    val masterWorkIds = MutableStateFlow<List<String>>(listOf("WRK-1001", "WRK-1002", "WRK-1003", "WRK-1004"))
+    val masterActivities = MutableStateFlow<List<String>>(listOf("Site Survey", "New Installation", "Maintenance", "Emergency Repair", "Audit"))
     val masterPincodes = MutableStateFlow(indiaPincodeMap.map { "${it.key} - ${it.value}" })
     val visitCounts = listOf("1", "2", "3", "4", "5+")
-
     val pastDates: List<String> = generateDatesList()
 
-    // Cloud Records Flow
+    // Sync Status indicator for Admin UI
+    val syncStatusMessage = MutableStateFlow("")
+    val isSyncing = MutableStateFlow(false)
+
+    // Live Records across all devices
     private val _records = MutableStateFlow<List<WorkRecord>>(emptyList())
     val records: StateFlow<List<WorkRecord>> = _records.asStateFlow()
 
     private val _formState = MutableStateFlow(EntryFormState())
     val formState: StateFlow<EntryFormState> = _formState.asStateFlow()
 
-    // Dashboard Filter Flow
+    // Dashboard Filters
     val searchQuery = MutableStateFlow("")
     val selectedLocationFilter = MutableStateFlow("All")
     val selectedActivityFilter = MutableStateFlow("All")
@@ -82,7 +56,22 @@ class WorkViewModel : ViewModel() {
         listenToWorkRecords()
     }
 
-    // 1. Cloud Listener: Ingest live entries across all devices
+    // --- Real-time Cloud Listener for Master Lists (All Devices) ---
+    private fun listenToMasterData() {
+        masterDoc.addSnapshotListener { snapshot, error ->
+            if (error != null || snapshot == null || !snapshot.exists()) return@addSnapshotListener
+
+            val cloudEmployees = snapshot.get("employees") as? List<*>
+            val cloudWorkIds = snapshot.get("workIds") as? List<*>
+            val cloudActivities = snapshot.get("activities") as? List<*>
+
+            cloudEmployees?.filterIsInstance<String>()?.let { if (it.isNotEmpty()) masterEmployees.value = it }
+            cloudWorkIds?.filterIsInstance<String>()?.let { if (it.isNotEmpty()) masterWorkIds.value = it }
+            cloudActivities?.filterIsInstance<String>()?.let { if (it.isNotEmpty()) masterActivities.value = it }
+        }
+    }
+
+    // --- Real-time Cloud Listener for Work Records ---
     private fun listenToWorkRecords() {
         recordsCollection
             .orderBy("timestamp", Query.Direction.DESCENDING)
@@ -96,28 +85,53 @@ class WorkViewModel : ViewModel() {
             }
     }
 
-    // 2. Cloud Listener: Ingest master dropdown modifications
-    private fun listenToMasterData() {
-        masterDoc.addSnapshotListener { snapshot, error ->
-            if (error != null || snapshot == null || !snapshot.exists()) {
-                val defaults = CloudMasterData()
-                masterDoc.set(defaults)
-                masterEmployees.value = defaults.employees
-                masterWorkIds.value = defaults.workIds
-                masterActivities.value = defaults.activities
-                return@addSnapshotListener
-            }
+    // --- SYNC BUTTON ACTION (Admin triggers cloud broadcast) ---
+    fun syncMasterDataToCloud() {
+        isSyncing.value = true
+        syncStatusMessage.value = "Syncing to cloud..."
 
-            val data = snapshot.toObject(CloudMasterData::class.java)
-            if (data != null) {
-                masterEmployees.value = data.employees
-                masterWorkIds.value = data.workIds
-                masterActivities.value = data.activities
+        val payload = hashMapOf(
+            "employees" to masterEmployees.value,
+            "workIds" to masterWorkIds.value,
+            "activities" to masterActivities.value
+        )
+
+        masterDoc.set(payload, SetOptions.merge())
+            .addOnSuccessListener {
+                isSyncing.value = false
+                syncStatusMessage.value = "Synced successfully! Available on all devices."
             }
+            .addOnFailureListener { e ->
+                isSyncing.value = false
+                syncStatusMessage.value = "Sync failed: ${e.localizedMessage}"
+            }
+    }
+
+    // Local additions before pressing Sync
+    fun addMasterEmployee(name: String) {
+        val trimmed = name.trim()
+        if (trimmed.isNotBlank() && !masterEmployees.value.contains(trimmed)) {
+            masterEmployees.value = masterEmployees.value + trimmed
+            syncStatusMessage.value = "Unsaved changes! Click 'Sync to All Devices'."
         }
     }
 
-    // 3. Cloud Action: Push new record online
+    fun addMasterWorkId(workId: String) {
+        val trimmed = workId.trim()
+        if (trimmed.isNotBlank() && !masterWorkIds.value.contains(trimmed)) {
+            masterWorkIds.value = masterWorkIds.value + trimmed
+            syncStatusMessage.value = "Unsaved changes! Click 'Sync to All Devices'."
+        }
+    }
+
+    fun addMasterActivity(activity: String) {
+        val trimmed = activity.trim()
+        if (trimmed.isNotBlank() && !masterActivities.value.contains(trimmed)) {
+            masterActivities.value = masterActivities.value + trimmed
+            syncStatusMessage.value = "Unsaved changes! Click 'Sync to All Devices'."
+        }
+    }
+
     fun saveRecord(): Boolean {
         val s = _formState.value
         if (s.customerName.isBlank() || s.phoneNumber.length != 10 || !s.phoneNumber.all { it.isDigit() }) {
@@ -146,32 +160,6 @@ class WorkViewModel : ViewModel() {
         return true
     }
 
-    // 4. Cloud Action: Admin pushes master dropdown options
-    fun addMasterEmployee(name: String) {
-        val trimmed = name.trim()
-        if (trimmed.isNotBlank() && !masterEmployees.value.contains(trimmed)) {
-            val updated = masterEmployees.value + trimmed
-            masterDoc.update("employees", updated)
-        }
-    }
-
-    fun addMasterWorkId(workId: String) {
-        val trimmed = workId.trim()
-        if (trimmed.isNotBlank() && !masterWorkIds.value.contains(trimmed)) {
-            val updated = masterWorkIds.value + trimmed
-            masterDoc.update("workIds", updated)
-        }
-    }
-
-    fun addMasterActivity(activity: String) {
-        val trimmed = activity.trim()
-        if (trimmed.isNotBlank() && !masterActivities.value.contains(trimmed)) {
-            val updated = masterActivities.value + trimmed
-            masterDoc.update("activities", updated)
-        }
-    }
-
-    // Authentication Handlers
     fun loginAsUser(employeeName: String) {
         _loggedInEmployee.value = employeeName
         _currentUserRole.value = UserRole.USER
@@ -219,7 +207,6 @@ class WorkViewModel : ViewModel() {
         )
     }
 
-    // Real-Time Filter Pipeline with User Isolation
     val visibleRecords = combine(
         _records,
         _currentUserRole,
@@ -254,6 +241,14 @@ class WorkViewModel : ViewModel() {
         }
     }
 }
+
+private data class FilterStateIntermediate(
+    val recs: List<WorkRecord>,
+    val role: UserRole,
+    val emp: String,
+    val query: String,
+    val loc: String
+)
 
 private fun generateDatesList(): List<String> {
     val dates = mutableListOf<String>()
