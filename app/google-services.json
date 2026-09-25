@@ -1,0 +1,29 @@
+{
+  "project_info": {
+    "project_number": "805949023548",
+    "project_id": "worktrackerapp-sachin",
+    "storage_bucket": "worktrackerapp-sachin.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:805949023548:android:bbbe9ea03d360535bb6a39",
+        "android_client_info": {
+          "package_name": "com.example.worktracker"
+        }
+      },
+      "oauth_client": [],
+      "api_key": [
+        {
+          "current_key": "AIzaSyAXci-5RovGWktyLw7Eb3EsrtV59Y2AxgY"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": []
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}
