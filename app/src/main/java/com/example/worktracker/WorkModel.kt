@@ -1,30 +1,48 @@
 package com.example.worktracker
 
-// Cloud-serializable Data Entity for Firestore
-data class WorkRecord(
-    val id: String = "",           // Firestore auto-generated document key
+enum class UserRole { NONE, USER, ADMIN }
+
+data class EntryFormState(
     val employeeName: String = "",
     val workId: String = "",
-    val date: String = "",         // Format: DD-MMM-YY
+    val date: String = "",
     val activity: String = "",
     val customerName: String = "",
-    val location: String = "",     // Format: "Pincode - Place"
+    val location: String = "",
+    val visitCount: String = "1",
+    val totalAmount: String = "",
+    val advanceAmount: String = "",
+    val pendingAmount: Double = 0.0,
+    val phoneNumber: String = ""
+)
+
+data class MonthlyAdvance(
+    val monthYear: String,
+    val totalAdvance: Double
+)
+
+data class WorkRecord(
+    val id: String = "",
+    val employeeName: String = "",
+    val workId: String = "",
+    val date: String = "",
+    val activity: String = "",
+    val customerName: String = "",
+    val location: String = "",
     val visitCount: String = "1",
     val totalAmount: Double = 0.0,
     val advanceAmount: Double = 0.0,
     val pendingAmount: Double = 0.0,
     val phoneNumber: String = "",
-    val timestamp: Long = System.currentTimeMillis() // Cloud sorting key
+    val timestamp: Long = System.currentTimeMillis()
 )
 
-// Master Dropdown Configuration synced across all devices
 data class CloudMasterData(
     val employees: List<String> = listOf("Ramesh Kumar", "Priya Sharma", "Murugan S", "Anand Raj"),
     val workIds: List<String> = listOf("WRK-1001", "WRK-1002", "WRK-1003", "WRK-1004"),
     val activities: List<String> = listOf("Site Survey", "New Installation", "Maintenance", "Emergency Repair", "Audit")
 )
 
-// Preloaded Indian PIN code directory
 val indiaPincodeMap = linkedMapOf(
     "641601" to "Tirupur",
     "641602" to "Tirupur North",
