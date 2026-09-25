@@ -14,6 +14,8 @@ import androidx.compose.material.icons.filled.Clear
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.geometry.CornerRadius
@@ -30,7 +32,6 @@ fun DashboardScreen(viewModel: WorkViewModel) {
     val role by viewModel.currentUserRole.collectAsState()
     val loggedInEmp by viewModel.loggedInEmployee.collectAsState()
 
-    // Filters
     val selectedLoc by viewModel.selectedLocationFilter.collectAsState()
     val selectedAct by viewModel.selectedActivityFilter.collectAsState()
     val selectedWorkId by viewModel.selectedWorkIdFilter.collectAsState()
@@ -41,16 +42,15 @@ fun DashboardScreen(viewModel: WorkViewModel) {
     val masterWorks by viewModel.masterWorkIds.collectAsState()
     val masterEmps by viewModel.masterEmployees.collectAsState()
 
-    val totalPending = records.sumOf { it.pendingAmount }
-    val totalAdvance = records.sumOf { it.advanceAmount }
-    val totalBilled = records.sumOf { it.totalAmount }
+    val totalPending: Double = records.sumOf { it.pendingAmount }
+    val totalAdvance: Double = records.sumOf { it.advanceAmount }
+    val totalBilled: Double = records.sumOf { it.totalAmount }
 
-    // Aggregate monthly advance amounts from filtered records
-    val monthlyAdvances = remember(records) {
-        records.groupBy { record ->
+    val monthlyAdvances: List<MonthlyAdvance> = remember(records) {
+        records.groupBy { record: WorkRecord ->
             val parts = record.date.split("-")
             if (parts.size == 3) "${parts[1]}-${parts[2]}" else record.date
-        }.map { (month, recList) ->
+        }.map { (month: String, recList: List<WorkRecord>) ->
             MonthlyAdvance(month, recList.sumOf { it.advanceAmount })
         }
     }
@@ -61,7 +61,6 @@ fun DashboardScreen(viewModel: WorkViewModel) {
             .padding(16.dp),
         verticalArrangement = Arrangement.spacedBy(14.dp)
     ) {
-        // Header
         item {
             Column {
                 Text(
@@ -77,7 +76,6 @@ fun DashboardScreen(viewModel: WorkViewModel) {
             }
         }
 
-        // Omni-Search
         item {
             OutlinedTextField(
                 value = search,
@@ -89,7 +87,6 @@ fun DashboardScreen(viewModel: WorkViewModel) {
             )
         }
 
-        // Horizontal Filters Section
         item {
             Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
                 Row(
@@ -144,7 +141,6 @@ fun DashboardScreen(viewModel: WorkViewModel) {
             }
         }
 
-        // Dedicated Score Card: Total Pending Amount
         item {
             Card(
                 modifier = Modifier.fillMaxWidth(),
@@ -183,7 +179,6 @@ fun DashboardScreen(viewModel: WorkViewModel) {
             }
         }
 
-        // Monthly Advance Amount Bar Chart
         item {
             ElevatedCard(modifier = Modifier.fillMaxWidth()) {
                 Column(modifier = Modifier.padding(16.dp)) {
@@ -212,7 +207,6 @@ fun DashboardScreen(viewModel: WorkViewModel) {
             }
         }
 
-        // Records Heading
         item {
             Text(
                 text = "Records (${records.size})",
@@ -221,8 +215,7 @@ fun DashboardScreen(viewModel: WorkViewModel) {
             )
         }
 
-        // Filtered Records List
-        items(records, key = { it.id }) { record ->
+        items(records, key = { record: WorkRecord -> record.id.ifEmpty { "${record.timestamp}_${record.phoneNumber}" } }) { record: WorkRecord ->
             RecordItemCard(record = record, showEmployee = role == UserRole.ADMIN)
         }
     }
@@ -276,7 +269,7 @@ fun MonthlyAdvanceBarChart(data: List<MonthlyAdvance>) {
             val slotWidth = canvasWidth / barCount
             val barWidth = slotWidth * 0.5f
 
-            data.forEachIndexed { index, item ->
+            data.forEachIndexed { index: Int, item: MonthlyAdvance ->
                 val barHeight = ((item.totalAdvance / maxVal) * (canvasHeight * 0.85f)).toFloat()
                 val left = (index * slotWidth) + ((slotWidth - barWidth) / 2f)
                 val top = canvasHeight - barHeight
@@ -296,7 +289,7 @@ fun MonthlyAdvanceBarChart(data: List<MonthlyAdvance>) {
             modifier = Modifier.fillMaxWidth(),
             horizontalArrangement = Arrangement.SpaceBetween
         ) {
-            data.forEach { item ->
+            data.forEach { item: MonthlyAdvance ->
                 Column(
                     modifier = Modifier.weight(1f),
                     horizontalAlignment = Alignment.CenterHorizontally
@@ -365,7 +358,7 @@ fun RecordItemCard(record: WorkRecord, showEmployee: Boolean) {
                 color = MaterialTheme.colorScheme.onSurfaceVariant
             )
 
-            HorizontalDivider(modifier = Modifier.padding(vertical = 8.dp))
+            Divider(modifier = Modifier.padding(vertical = 8.dp))
 
             Row(
                 modifier = Modifier.fillMaxWidth(),
