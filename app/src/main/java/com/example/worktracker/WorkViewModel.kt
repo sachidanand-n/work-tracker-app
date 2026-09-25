@@ -18,33 +18,28 @@ class WorkViewModel : ViewModel() {
     private val recordsCollection = db.collection("work_records")
     private val masterDoc = db.collection("app_config").document("master_data")
 
-    // Authentication & Role
     private val _currentUserRole = MutableStateFlow(UserRole.NONE)
     val currentUserRole: StateFlow<UserRole> = _currentUserRole.asStateFlow()
 
     private val _loggedInEmployee = MutableStateFlow("")
     val loggedInEmployee: StateFlow<String> = _loggedInEmployee.asStateFlow()
 
-    // Master Data States
     val masterEmployees = MutableStateFlow<List<String>>(listOf("Ramesh Kumar", "Priya Sharma", "Murugan S", "Anand Raj"))
     val masterWorkIds = MutableStateFlow<List<String>>(listOf("WRK-1001", "WRK-1002", "WRK-1003", "WRK-1004"))
     val masterActivities = MutableStateFlow<List<String>>(listOf("Site Survey", "New Installation", "Maintenance", "Emergency Repair", "Audit"))
     val masterPincodes = MutableStateFlow(indiaPincodeMap.map { "${it.key} - ${it.value}" })
-    val visitCounts = listOf("1", "2", "3", "4", "5+")
+    val visitCounts: List<String> = listOf("1", "2", "3", "4", "5+")
     val pastDates: List<String> = generateDatesList()
 
-    // Sync Status indicator for Admin UI
     val syncStatusMessage = MutableStateFlow("")
     val isSyncing = MutableStateFlow(false)
 
-    // Live Records across all devices
     private val _records = MutableStateFlow<List<WorkRecord>>(emptyList())
     val records: StateFlow<List<WorkRecord>> = _records.asStateFlow()
 
     private val _formState = MutableStateFlow(EntryFormState())
     val formState: StateFlow<EntryFormState> = _formState.asStateFlow()
 
-    // Dashboard Filters
     val searchQuery = MutableStateFlow("")
     val selectedLocationFilter = MutableStateFlow("All")
     val selectedActivityFilter = MutableStateFlow("All")
@@ -56,11 +51,9 @@ class WorkViewModel : ViewModel() {
         listenToWorkRecords()
     }
 
-    // --- Real-time Cloud Listener for Master Lists (All Devices) ---
     private fun listenToMasterData() {
         masterDoc.addSnapshotListener { snapshot, error ->
             if (error != null || snapshot == null || !snapshot.exists()) return@addSnapshotListener
-
             val cloudEmployees = snapshot.get("employees") as? List<*>
             val cloudWorkIds = snapshot.get("workIds") as? List<*>
             val cloudActivities = snapshot.get("activities") as? List<*>
@@ -71,13 +64,11 @@ class WorkViewModel : ViewModel() {
         }
     }
 
-    // --- Real-time Cloud Listener for Work Records ---
     private fun listenToWorkRecords() {
         recordsCollection
             .orderBy("timestamp", Query.Direction.DESCENDING)
             .addSnapshotListener { snapshot, error ->
                 if (error != null || snapshot == null) return@addSnapshotListener
-
                 val cloudList = snapshot.documents.mapNotNull { doc ->
                     doc.toObject(WorkRecord::class.java)?.copy(id = doc.id)
                 }
@@ -85,7 +76,6 @@ class WorkViewModel : ViewModel() {
             }
     }
 
-    // --- SYNC BUTTON ACTION (Admin triggers cloud broadcast) ---
     fun syncMasterDataToCloud() {
         isSyncing.value = true
         syncStatusMessage.value = "Syncing to cloud..."
@@ -107,7 +97,6 @@ class WorkViewModel : ViewModel() {
             }
     }
 
-    // Local additions before pressing Sync
     fun addMasterEmployee(name: String) {
         val trimmed = name.trim()
         if (trimmed.isNotBlank() && !masterEmployees.value.contains(trimmed)) {
@@ -134,7 +123,7 @@ class WorkViewModel : ViewModel() {
 
     fun saveRecord(): Boolean {
         val s = _formState.value
-        if (s.customerName.isBlank() || s.phoneNumber.length != 10 || !s.phoneNumber.all { it.isDigit() }) {
+        if (s.customerName.isBlank() || s.phoneNumber.length != 10 || !s.phoneNumber.all { char -> char.isDigit() }) {
             return false
         }
 
@@ -213,13 +202,14 @@ class WorkViewModel : ViewModel() {
         _loggedInEmployee,
         searchQuery,
         selectedLocationFilter
-    ) { recs, role, emp, query, loc ->
-        FilterStateIntermediate(recs, role, emp, query, loc)
+    ) { recs: List<WorkRecord>, role: UserRole, emp: String, query: String, loc: String ->
+        FilterIntermediate(recs, role, emp, query, loc)
     }.combine(
-        combine(selectedActivityFilter, selectedWorkIdFilter, selectedEmployeeFilter) { act, work, targetEmp ->
+        combine(selectedActivityFilter, selectedWorkIdFilter, selectedEmployeeFilter) { act: String, work: String, targetEmp: String ->
             Triple(act, work, targetEmp)
         }
-    ) { inter, (act, work, targetEmp) ->
+    ) { inter: FilterIntermediate, trio: Triple<String, String, String> ->
+        val (act, work, targetEmp) = trio
         val roleFiltered = if (inter.role == UserRole.USER) {
             inter.recs.filter { it.employeeName.equals(inter.emp, ignoreCase = true) }
         } else {
@@ -242,7 +232,7 @@ class WorkViewModel : ViewModel() {
     }
 }
 
-private data class FilterStateIntermediate(
+data class FilterIntermediate(
     val recs: List<WorkRecord>,
     val role: UserRole,
     val emp: String,
