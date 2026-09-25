@@ -7,6 +7,8 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Sync
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.font.FontWeight
@@ -23,6 +25,8 @@ fun AdminPanelScreen(viewModel: WorkViewModel) {
     val activities by viewModel.masterActivities.collectAsState()
 
     val isSyncing by viewModel.isSyncing.collectAsState()
+    val progress by viewModel.syncProgress.collectAsState()
+    val percentage by viewModel.syncPercentage.collectAsState()
     val syncStatus by viewModel.syncStatusMessage.collectAsState()
 
     Column(
@@ -34,7 +38,7 @@ fun AdminPanelScreen(viewModel: WorkViewModel) {
     ) {
         Text("Admin Database Management", style = MaterialTheme.typography.headlineMedium, fontWeight = FontWeight.Bold)
 
-        // SYNC CARD: Pushes all local master changes to Firestore for all users
+        // SYNC CARD WITH PERCENTAGE VISUALIZER
         Card(
             modifier = Modifier.fillMaxWidth(),
             colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.primaryContainer)
@@ -47,7 +51,7 @@ fun AdminPanelScreen(viewModel: WorkViewModel) {
                     color = MaterialTheme.colorScheme.onPrimaryContainer
                 )
                 Text(
-                    text = "Press 'Sync' to publish all new Work IDs, Activities, and Employees to all field user devices.",
+                    text = "Broadcast all new Work IDs, Activities, and Employees to all user devices.",
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onPrimaryContainer
                 )
@@ -59,28 +63,39 @@ fun AdminPanelScreen(viewModel: WorkViewModel) {
                     modifier = Modifier.fillMaxWidth().height(48.dp),
                     enabled = !isSyncing
                 ) {
-                    if (isSyncing) {
-                        CircularProgressIndicator(
-                            modifier = Modifier.size(20.dp),
-                            color = MaterialTheme.colorScheme.onPrimary,
-                            strokeWidth = 2.dp
-                        )
-                        Spacer(modifier = Modifier.width(8.dp))
-                        Text("Syncing...")
-                    } else {
-                        Icon(Icons.Default.Sync, contentDescription = "Sync")
-                        Spacer(modifier = Modifier.width(8.dp))
-                        Text("Sync to All Devices")
-                    }
+                    Icon(Icons.Default.Sync, contentDescription = "Sync")
+                    Spacer(modifier = Modifier.width(8.dp))
+                    Text(if (isSyncing) "Synchronizing ($percentage)..." else "Sync to All Devices")
                 }
 
-                if (syncStatus.isNotEmpty()) {
-                    Spacer(modifier = Modifier.height(8.dp))
-                    Text(
-                        text = syncStatus,
-                        style = MaterialTheme.typography.labelMedium,
-                        fontWeight = FontWeight.SemiBold,
-                        color = MaterialTheme.colorScheme.onPrimaryContainer
+                // Live Percentage Progress Bar
+                if (isSyncing || progress > 0f) {
+                    Spacer(modifier = Modifier.height(12.dp))
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Text(
+                            text = syncStatus,
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onPrimaryContainer
+                        )
+                        Text(
+                            text = percentage,
+                            style = MaterialTheme.typography.titleMedium,
+                            fontWeight = FontWeight.Bold,
+                            color = MaterialTheme.colorScheme.primary
+                        )
+                    }
+                    Spacer(modifier = Modifier.height(6.dp))
+                    LinearProgressIndicator(
+                        progress = { progress },
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .height(8.dp),
+                        color = MaterialTheme.colorScheme.primary,
+                        trackColor = MaterialTheme.colorScheme.surfaceVariant
                     )
                 }
             }
