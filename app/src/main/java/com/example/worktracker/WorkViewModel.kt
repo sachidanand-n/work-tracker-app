@@ -1,13 +1,16 @@
 package com.example.worktracker
 
 import androidx.lifecycle.ViewModel
+import androidx.lifecycle.viewModelScope
 import com.google.firebase.firestore.FirebaseFirestore
 import com.google.firebase.firestore.Query
 import com.google.firebase.firestore.SetOptions
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.combine
+import kotlinx.coroutines.launch
 import java.text.SimpleDateFormat
 import java.util.Calendar
 import java.util.Locale
@@ -31,8 +34,11 @@ class WorkViewModel : ViewModel() {
     val visitCounts: List<String> = listOf("1", "2", "3", "4", "5+")
     val pastDates: List<String> = generateDatesList()
 
-    val syncStatusMessage = MutableStateFlow("")
+    // Sync Percentage & Progress
     val isSyncing = MutableStateFlow(false)
+    val syncProgress = MutableStateFlow(0f)         // 0.0f to 1.0f for progress bar
+    val syncPercentage = MutableStateFlow("0%")     // "0%" to "100%"
+    val syncStatusMessage = MutableStateFlow("")
 
     private val _records = MutableStateFlow<List<WorkRecord>>(emptyList())
     val records: StateFlow<List<WorkRecord>> = _records.asStateFlow()
@@ -76,32 +82,49 @@ class WorkViewModel : ViewModel() {
             }
     }
 
+    // Percentage-Tracked Cloud Sync
     fun syncMasterDataToCloud() {
-        isSyncing.value = true
-        syncStatusMessage.value = "Syncing to cloud..."
+        viewModelScope.launch {
+            isSyncing.value = true
+            syncProgress.value = 0.15f
+            syncPercentage.value = "15%"
+            syncStatusMessage.value = "Validating master database..."
+            delay(250)
 
-        val payload = hashMapOf(
-            "employees" to masterEmployees.value,
-            "workIds" to masterWorkIds.value,
-            "activities" to masterActivities.value
-        )
+            syncProgress.value = 0.45f
+            syncPercentage.value = "45%"
+            syncStatusMessage.value = "Packaging Work IDs & Activities..."
+            delay(250)
 
-        masterDoc.set(payload, SetOptions.merge())
-            .addOnSuccessListener {
-                isSyncing.value = false
-                syncStatusMessage.value = "Synced successfully! Available on all devices."
-            }
-            .addOnFailureListener { e ->
-                isSyncing.value = false
-                syncStatusMessage.value = "Sync failed: ${e.localizedMessage}"
-            }
+            syncProgress.value = 0.70f
+            syncPercentage.value = "70%"
+            syncStatusMessage.value = "Transmitting to Google Cloud..."
+
+            val payload = hashMapOf(
+                "employees" to masterEmployees.value,
+                "workIds" to masterWorkIds.value,
+                "activities" to masterActivities.value
+            )
+
+            masterDoc.set(payload, SetOptions.merge())
+                .addOnSuccessListener {
+                    syncProgress.value = 1.0f
+                    syncPercentage.value = "100%"
+                    syncStatusMessage.value = "100% Synced! Available on all field devices."
+                    isSyncing.value = false
+                }
+                .addOnFailureListener { e ->
+                    isSyncing.value = false
+                    syncStatusMessage.value = "Sync failed: ${e.localizedMessage}"
+                }
+        }
     }
 
     fun addMasterEmployee(name: String) {
         val trimmed = name.trim()
         if (trimmed.isNotBlank() && !masterEmployees.value.contains(trimmed)) {
             masterEmployees.value = masterEmployees.value + trimmed
-            syncStatusMessage.value = "Unsaved changes! Click 'Sync to All Devices'."
+            syncStatusMessage.value = "Unsaved changes! Click 'Sync' to publish."
         }
     }
 
@@ -109,7 +132,7 @@ class WorkViewModel : ViewModel() {
         val trimmed = workId.trim()
         if (trimmed.isNotBlank() && !masterWorkIds.value.contains(trimmed)) {
             masterWorkIds.value = masterWorkIds.value + trimmed
-            syncStatusMessage.value = "Unsaved changes! Click 'Sync to All Devices'."
+            syncStatusMessage.value = "Unsaved changes! Click 'Sync' to publish."
         }
     }
 
@@ -117,7 +140,7 @@ class WorkViewModel : ViewModel() {
         val trimmed = activity.trim()
         if (trimmed.isNotBlank() && !masterActivities.value.contains(trimmed)) {
             masterActivities.value = masterActivities.value + trimmed
-            syncStatusMessage.value = "Unsaved changes! Click 'Sync to All Devices'."
+            syncStatusMessage.value = "Unsaved changes! Click 'Sync' to publish."
         }
     }
 
