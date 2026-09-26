@@ -1,9 +1,16 @@
 package com.example.worktracker
 
 import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.text.KeyboardOptions
+import androidx.compose.foundation.verticalScroll
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Lock
+import androidx.compose.material.icons.filled.Person
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.font.FontWeight
@@ -13,16 +20,29 @@ import androidx.compose.ui.unit.dp
 
 @Composable
 fun LoginScreen(viewModel: WorkViewModel) {
-    var selectedTab by remember { mutableIntStateOf(0) }
-    val employees by viewModel.masterEmployees.collectAsState()
-    var selectedEmployee by remember { mutableStateOf(employees.firstOrNull() ?: "") }
-    
+    var selectedRole by remember { mutableStateOf(UserRole.USER) }
     var adminPassword by remember { mutableStateOf("") }
     var passwordError by remember { mutableStateOf(false) }
+
+    val masterEmployees by viewModel.masterEmployees.collectAsState()
+    
+    // Filter to ONLY ACTIVE employee names for user login
+    val activeEmployeeNames = remember(masterEmployees) {
+        masterEmployees.filter { it.isActive }.map { it.name }
+    }
+    
+    var selectedEmployee by remember { mutableStateOf("") }
+
+    LaunchedEffect(activeEmployeeNames) {
+        if (selectedEmployee.isEmpty() || !activeEmployeeNames.contains(selectedEmployee)) {
+            selectedEmployee = activeEmployeeNames.firstOrNull() ?: ""
+        }
+    }
 
     Column(
         modifier = Modifier
             .fillMaxSize()
+            .verticalScroll(rememberScrollState())
             .padding(24.dp),
         horizontalAlignment = Alignment.CenterHorizontally,
         verticalArrangement = Arrangement.Center
@@ -34,74 +54,112 @@ fun LoginScreen(viewModel: WorkViewModel) {
             color = MaterialTheme.colorScheme.primary
         )
         Text(
-            text = "Select your portal to continue",
+            text = "Field Service Management Portal",
             style = MaterialTheme.typography.bodyMedium,
             color = MaterialTheme.colorScheme.onSurfaceVariant
         )
 
-        Spacer(modifier = Modifier.height(24.dp))
+        Spacer(modifier = Modifier.height(32.dp))
 
-        TabRow(selectedTabIndex = selectedTab) {
-            Tab(selected = selectedTab == 0, onClick = { selectedTab = 0 }, text = { Text("User Login") })
-            Tab(selected = selectedTab == 1, onClick = { selectedTab = 1 }, text = { Text("Admin Portal") })
+        // Role Tab Switcher (Field User vs Admin)
+        SingleChoiceSegmentedButtonRow(modifier = Modifier.fillMaxWidth()) {
+            SegmentedButton(
+                selected = selectedRole == UserRole.USER,
+                onClick = {
+                    selectedRole = UserRole.USER
+                    passwordError = false
+                },
+                shape = SegmentedButtonDefaults.itemShape(index = 0, count = 2),
+                icon = { Icon(Icons.Default.Person, contentDescription = null) }
+            ) {
+                Text("Technician")
+            }
+
+            SegmentedButton(
+                selected = selectedRole == UserRole.ADMIN,
+                onClick = {
+                    selectedRole = UserRole.ADMIN
+                    passwordError = false
+                },
+                shape = SegmentedButtonDefaults.itemShape(index = 1, count = 2),
+                icon = { Icon(Icons.Default.Lock, contentDescription = null) }
+            ) {
+                Text("Admin")
+            }
         }
 
         Spacer(modifier = Modifier.height(24.dp))
 
-        if (selectedTab == 0) {
-            // User login: Pick registered name, no password needed
-            Text(text = "Select Employee Name", style = MaterialTheme.typography.titleMedium)
-            Spacer(modifier = Modifier.height(8.dp))
-
-            if (employees.isEmpty()) {
-                Text("No employees added by Admin yet.", color = MaterialTheme.colorScheme.error)
-            } else {
-                AppDropdown(
-                    label = "Your Name",
-                    options = employees,
-                    selectedOption = selectedEmployee.ifEmpty { employees.first() },
-                    onOptionSelected = { selectedEmployee = it }
-                )
-                Spacer(modifier = Modifier.height(16.dp))
-                Button(
-                    onClick = {
-                        val emp = selectedEmployee.ifEmpty { employees.first() }
-                        viewModel.loginAsUser(emp)
-                    },
-                    modifier = Modifier.fillMaxWidth().height(50.dp)
-                ) {
-                    Text("Enter as User")
-                }
-            }
-        } else {
-            // Admin login: Password protected
-            Text(text = "Admin Access", style = MaterialTheme.typography.titleMedium)
-            Spacer(modifier = Modifier.height(8.dp))
-
-            OutlinedTextField(
-                value = adminPassword,
-                onValueChange = {
-                    adminPassword = it
-                    passwordError = false
-                },
-                label = { Text("Enter Admin Password") },
-                visualTransformation = PasswordVisualTransformation(),
-                keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Password),
-                isError = passwordError,
-                supportingText = { if (passwordError) Text("Incorrect password! (Default: admin123)") },
-                modifier = Modifier.fillMaxWidth()
-            )
-
-            Spacer(modifier = Modifier.height(16.dp))
-
-            Button(
-                onClick = {
-                    val success = viewModel.loginAsAdmin(adminPassword)
-                    if (!success) passwordError = true
-                },
-                modifier = Modifier.fillMaxWidth().height(50.dp)
+        Card(
+            modifier = Modifier.fillMaxWidth(),
+            elevation = CardDefaults.cardElevation(defaultElevation = 2.dp)
+        ) {
+            Column(
+                modifier = Modifier.padding(20.dp),
+                verticalArrangement = Arrangement.spacedBy(16.dp)
             ) {
-                Text("Unlock Admin Panel")
+                if (selectedRole == UserRole.USER) {
+                    Text("Select Your Name", fontWeight = FontWeight.SemiBold)
+
+                    if (activeEmployeeNames.isEmpty()) {
+                        Text(
+                            text = "No active technicians registered. Contact your Admin.",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.error
+                        )
+                    } else {
+                        AppDropdown(
+                            label = "Technician Name",
+                            options = activeEmployeeNames,
+                            selectedOption = selectedEmployee.ifEmpty { activeEmployeeNames.first() },
+                            onOptionSelected = { selectedEmployee = it }
+                        )
+
+                        Button(
+                            onClick = {
+                                val emp = selectedEmployee.ifEmpty { activeEmployeeNames.first() }
+                                viewModel.loginAsUser(emp)
+                            },
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .height(48.dp)
+                        ) {
+                            Text("Continue to Field App")
+                        }
+                    }
+                } else {
+                    Text("Admin Authentication", fontWeight = FontWeight.SemiBold)
+
+                    OutlinedTextField(
+                        value = adminPassword,
+                        onValueChange = {
+                            adminPassword = it
+                            passwordError = false
+                        },
+                        label = { Text("Password (Default: admin123)") },
+                        visualTransformation = PasswordVisualTransformation(),
+                        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Password),
+                        isError = passwordError,
+                        supportingText = {
+                            if (passwordError) {
+                                Text("Incorrect password", color = MaterialTheme.colorScheme.error)
+                            }
+                        },
+                        modifier = Modifier.fillMaxWidth()
+                    )
+
+                    Button(
+                        onClick = {
+                            val success = viewModel.loginAsAdmin(adminPassword)
+                            if (!success) passwordError = true
+                        },
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .height(48.dp)
+                    ) {
+                        Text("Log In as Admin")
+                    }
+                }
             }
         }
     }
