@@ -1,0 +1,62 @@
+package com.example.worktracker
+
+val tamilNaduPincodeList: List<PincodeInfo> by lazy {
+    tamilNaduPincodeMap.map { (pin, pair) ->
+        PincodeInfo(pincode = pin, place = pair.first, district = pair.second)
+    }.sortedBy { it.pincode }
+}
+
+val tamilNaduPincodeMap: Map<String, Pair<String, String>> = mapOf(
+    "600001" to Pair("George Town, Parrys", "Chennai"),
+    "600002" to Pair("Anna Salai", "Chennai"),
+    "600003" to Pair("Park Town, Central", "Chennai"),
+    "600004" to Pair("Mylapore, Santhome", "Chennai"),
+    "600005" to Pair("Triplicane", "Chennai"),
+    "600006" to Pair("Thousand Lights", "Chennai"),
+    "600017" to Pair("T. Nagar", "Chennai"),
+    "600020" to Pair("Adyar", "Chennai"),
+    "600028" to Pair("R.A. Puram, Mylapore", "Chennai"),
+    "600040" to Pair("Anna Nagar", "Chennai"),
+    "600042" to Pair("Velachery", "Chennai"),
+    "600096" to Pair("Perungudi, OMR", "Chennai"),
+    "621704" to Pair("Ariyalur, Cholavaram, Kilpalur", "Ariyalur"),
+    "621712" to Pair("Kunnam", "Ariyalur"),
+    "621714" to Pair("Agaram", "Ariyalur"),
+    "621717" to Pair("Alathur", "Ariyalur"),
+    "621801" to Pair("Andimadam", "Ariyalur"),
+    "621802" to Pair("Jayankondam", "Ariyalur"),
+    "621804" to Pair("Adhanur, Keelapalur", "Ariyalur"),
+    "624001" to Pair("Dindigul Head Post", "Dindigul"),
+    "624002" to Pair("Dindigul West", "Dindigul"),
+    "624601" to Pair("Palani", "Dindigul"),
+    "625001" to Pair("Madurai Town", "Madurai"),
+    "625002" to Pair("Tallakulam", "Madurai"),
+    "625009" to Pair("Anna Nagar Madurai", "Madurai"),
+    "627001" to Pair("Tirunelveli Town", "Tirunelveli"),
+    "627002" to Pair("Tirunelveli Junction", "Tirunelveli"),
+    "628001" to Pair("Thoothukudi Port", "Thoothukudi"),
+    "636001" to Pair("Salem Head Office", "Salem"),
+    "638001" to Pair("Erode Head Post", "Erode"),
+    "638009" to Pair("Erode Collectorate", "Erode"),
+    "638052" to Pair("Perundurai", "Erode"),
+    "638112" to Pair("Bhavani", "Erode"),
+    "638401" to Pair("Gobichettipalayam", "Erode"),
+    "638656" to Pair("Kangeyam", "Tiruppur"),
+    "638701" to Pair("Uthukuli", "Tiruppur"),
+    "641001" to Pair("Coimbatore South", "Coimbatore"),
+    "641002" to Pair("R.S. Puram", "Coimbatore"),
+    "641004" to Pair("Peelamedu", "Coimbatore"),
+    "641012" to Pair("Gandhipuram", "Coimbatore"),
+    "641018" to Pair("Coimbatore Central", "Coimbatore"),
+    "641035" to Pair("Saravanampatti", "Coimbatore"),
+    "641045" to Pair("Ramanathapuram Coimbatore", "Coimbatore"),
+    "641046" to Pair("Singanallur", "Coimbatore"),
+    "641601" to Pair("Tirupur Head Post", "Tiruppur"),
+    "641602" to Pair("Tirupur North", "Tiruppur"),
+    "641603" to Pair("Nallur", "Tiruppur"),
+    "641604" to Pair("Tirupur South, Veerapandi", "Tiruppur"),
+    "641607" to Pair("Avinashi", "Tiruppur"),
+    "641664" to Pair("Palladam", "Tiruppur"),
+    "642001" to Pair("Pollachi Head Post", "Coimbatore"),
+    "642126" to Pair("Udumalpet", "Tiruppur")
+)
