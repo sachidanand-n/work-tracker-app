@@ -24,10 +24,16 @@ fun DataEntryScreen(
     val userRole by viewModel.currentUserRole.collectAsState()
     val loggedInEmp by viewModel.loggedInEmployee.collectAsState()
 
-    val employees by viewModel.masterEmployees.collectAsState()
-    val workIds by viewModel.masterWorkIds.collectAsState()
-    val activities by viewModel.masterActivities.collectAsState()
-    val pincodes by viewModel.masterPincodes.collectAsState()
+    // Filter to ONLY ACTIVE items for data entry
+    val allEmployees by viewModel.masterEmployees.collectAsState()
+    val allWorkIds by viewModel.masterWorkIds.collectAsState()
+    val allActivities by viewModel.masterActivities.collectAsState()
+
+    val activeEmployees = remember(allEmployees) { allEmployees.filter { it.isActive }.map { it.name } }
+    val activeWorkIds = remember(allWorkIds) { allWorkIds.filter { it.isActive }.map { it.name } }
+    val activeActivities = remember(allActivities) { allActivities.filter { it.isActive }.map { it.name } }
+
+    val pincodeOptions = remember { tamilNaduPincodeList.map { it.pincode } }
 
     val isPhoneValid = form.phoneNumber.length == 10 && form.phoneNumber.all { char -> char.isDigit() }
     var submitError by remember { mutableStateOf(false) }
@@ -52,16 +58,16 @@ fun DataEntryScreen(
         } else {
             AppDropdown(
                 label = "Employee Name (Admin selector)",
-                options = employees,
-                selectedOption = form.employeeName.ifEmpty { employees.firstOrNull() ?: "" },
+                options = activeEmployees,
+                selectedOption = form.employeeName.ifEmpty { activeEmployees.firstOrNull() ?: "" },
                 onOptionSelected = { selected -> viewModel.updateForm { copy(employeeName = selected) } }
             )
         }
 
         AppDropdown(
             label = "Work ID",
-            options = workIds,
-            selectedOption = form.workId.ifEmpty { workIds.firstOrNull() ?: "" },
+            options = activeWorkIds,
+            selectedOption = form.workId.ifEmpty { activeWorkIds.firstOrNull() ?: "" },
             onOptionSelected = { selected -> viewModel.updateForm { copy(workId = selected) } }
         )
 
@@ -74,8 +80,8 @@ fun DataEntryScreen(
 
         AppDropdown(
             label = "Activity",
-            options = activities,
-            selectedOption = form.activity.ifEmpty { activities.firstOrNull() ?: "" },
+            options = activeActivities,
+            selectedOption = form.activity.ifEmpty { activeActivities.firstOrNull() ?: "" },
             onOptionSelected = { selected -> viewModel.updateForm { copy(activity = selected) } }
         )
 
@@ -86,12 +92,41 @@ fun DataEntryScreen(
             modifier = Modifier.fillMaxWidth()
         )
 
-        AppDropdown(
-            label = "Location (Pincode - Place)",
-            options = pincodes,
-            selectedOption = form.location.ifEmpty { pincodes.firstOrNull() ?: "" },
-            onOptionSelected = { selected -> viewModel.updateForm { copy(location = selected) } }
+        // --- SPLIT LOCATION (PINCODE, PLACE, DISTRICT) ---
+        Text(
+            text = "Location Details",
+            style = MaterialTheme.typography.titleSmall,
+            fontWeight = FontWeight.Bold,
+            color = MaterialTheme.colorScheme.primary
         )
+
+        AppDropdown(
+            label = "Pincode (Select to auto-retrieve Place & District) *",
+            options = pincodeOptions,
+            selectedOption = form.pincode,
+            onOptionSelected = { selectedPin -> viewModel.onPincodeSelected(selectedPin) }
+        )
+
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.spacedBy(8.dp)
+        ) {
+            OutlinedTextField(
+                value = form.place,
+                onValueChange = {},
+                readOnly = true,
+                label = { Text("Place (Auto)") },
+                modifier = Modifier.weight(1.2f)
+            )
+
+            OutlinedTextField(
+                value = form.district,
+                onValueChange = {},
+                readOnly = true,
+                label = { Text("District (Auto)") },
+                modifier = Modifier.weight(1f)
+            )
+        }
 
         AppDropdown(
             label = "No. of Visit",
