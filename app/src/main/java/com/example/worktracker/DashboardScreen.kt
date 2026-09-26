@@ -24,6 +24,9 @@ import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
+import java.text.SimpleDateFormat
+import java.util.Date
+import java.util.Locale
 
 @Composable
 fun DashboardScreen(viewModel: WorkViewModel) {
@@ -32,15 +35,18 @@ fun DashboardScreen(viewModel: WorkViewModel) {
     val role by viewModel.currentUserRole.collectAsState()
     val loggedInEmp by viewModel.loggedInEmployee.collectAsState()
 
-    val selectedLoc by viewModel.selectedLocationFilter.collectAsState()
+    val selectedDistrict by viewModel.selectedDistrictFilter.collectAsState()
     val selectedAct by viewModel.selectedActivityFilter.collectAsState()
     val selectedWorkId by viewModel.selectedWorkIdFilter.collectAsState()
     val selectedEmp by viewModel.selectedEmployeeFilter.collectAsState()
 
-    val masterLocs by viewModel.masterPincodes.collectAsState()
     val masterActs by viewModel.masterActivities.collectAsState()
     val masterWorks by viewModel.masterWorkIds.collectAsState()
     val masterEmps by viewModel.masterEmployees.collectAsState()
+
+    val districtOptions = remember {
+        listOf("All") + tamilNaduPincodeList.map { it.district }.distinct().sorted()
+    }
 
     val totalPending: Double = records.sumOf { it.pendingAmount }
     val totalAdvance: Double = records.sumOf { it.advanceAmount }
@@ -81,7 +87,7 @@ fun DashboardScreen(viewModel: WorkViewModel) {
                 value = search,
                 onValueChange = { viewModel.searchQuery.value = it },
                 modifier = Modifier.fillMaxWidth(),
-                placeholder = { Text("Search customer, phone, location, work ID...") },
+                placeholder = { Text("Search customer, phone, pincode, district...") },
                 leadingIcon = { Icon(Icons.Default.Search, contentDescription = null) },
                 singleLine = true
             )
@@ -112,29 +118,29 @@ fun DashboardScreen(viewModel: WorkViewModel) {
                         DropdownFilterChip(
                             label = "Employee",
                             currentValue = selectedEmp,
-                            options = listOf("All") + masterEmps,
+                            options = listOf("All") + masterEmps.map { it.name },
                             onSelect = { viewModel.selectedEmployeeFilter.value = it }
                         )
                     }
 
                     DropdownFilterChip(
-                        label = "Location",
-                        currentValue = selectedLoc,
-                        options = listOf("All") + masterLocs,
-                        onSelect = { viewModel.selectedLocationFilter.value = it }
+                        label = "District",
+                        currentValue = selectedDistrict,
+                        options = districtOptions,
+                        onSelect = { viewModel.selectedDistrictFilter.value = it }
                     )
 
                     DropdownFilterChip(
                         label = "Activity",
                         currentValue = selectedAct,
-                        options = listOf("All") + masterActs,
+                        options = listOf("All") + masterActs.map { it.name },
                         onSelect = { viewModel.selectedActivityFilter.value = it }
                     )
 
                     DropdownFilterChip(
                         label = "Work ID",
                         currentValue = selectedWorkId,
-                        options = listOf("All") + masterWorks,
+                        options = listOf("All") + masterWorks.map { it.name },
                         onSelect = { viewModel.selectedWorkIdFilter.value = it }
                     )
                 }
@@ -217,6 +223,105 @@ fun DashboardScreen(viewModel: WorkViewModel) {
 
         items(records, key = { record: WorkRecord -> record.id.ifEmpty { "${record.timestamp}_${record.phoneNumber}" } }) { record: WorkRecord ->
             RecordItemCard(record = record, showEmployee = role == UserRole.ADMIN)
+        }
+    }
+}
+
+@Composable
+fun RecordItemCard(record: WorkRecord, showEmployee: Boolean) {
+    val context = LocalContext.current
+    val timeFormatter = remember { SimpleDateFormat("hh:mm a", Locale.getDefault()) }
+    val formattedTime = remember(record.timestamp) { timeFormatter.format(Date(record.timestamp)) }
+
+    Card(
+        modifier = Modifier.fillMaxWidth(),
+        elevation = CardDefaults.cardElevation(defaultElevation = 2.dp)
+    ) {
+        Column(modifier = Modifier.padding(14.dp)) {
+            // Header Row: Work ID, Date, and Creation Time (Top-Right)
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Text(
+                    text = "${record.workId} • ${record.date}",
+                    style = MaterialTheme.typography.labelLarge,
+                    color = MaterialTheme.colorScheme.primary,
+                    fontWeight = FontWeight.Bold
+                )
+
+                // Time placed in top right corner in small font
+                Text(
+                    text = formattedTime,
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    fontWeight = FontWeight.Medium
+                )
+            }
+
+            Spacer(modifier = Modifier.height(4.dp))
+
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Text(
+                    text = record.customerName,
+                    style = MaterialTheme.typography.titleMedium,
+                    fontWeight = FontWeight.SemiBold
+                )
+                AssistChip(
+                    onClick = {},
+                    label = { Text("Visits: ${record.visitCount}", style = MaterialTheme.typography.labelSmall) }
+                )
+            }
+
+            if (showEmployee) {
+                Text(
+                    text = "Emp: ${record.employeeName}",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.tertiary,
+                    fontWeight = FontWeight.Bold
+                )
+            }
+
+            Text(
+                text = "${record.activity} | ${record.place}, ${record.district} (${record.pincode})",
+                style = MaterialTheme.typography.bodyMedium,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+
+            Divider(modifier = Modifier.padding(vertical = 8.dp))
+
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Column {
+                    Text(
+                        text = "Total: ₹${record.totalAmount}  |  Adv: ₹${record.advanceAmount}",
+                        style = MaterialTheme.typography.bodySmall
+                    )
+                    Text(
+                        text = "Pending: ₹${record.pendingAmount}",
+                        style = MaterialTheme.typography.bodyMedium,
+                        fontWeight = FontWeight.Bold,
+                        color = if (record.pendingAmount > 0) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.primary
+                    )
+                }
+
+                IconButton(
+                    onClick = {
+                        val intent = Intent(Intent.ACTION_DIAL, Uri.parse("tel:${record.phoneNumber}"))
+                        context.startActivity(intent)
+                    }
+                ) {
+                    Icon(Icons.Default.Call, contentDescription = "Call Customer", tint = MaterialTheme.colorScheme.primary)
+                }
+            }
         }
     }
 }
@@ -305,86 +410,6 @@ fun MonthlyAdvanceBarChart(data: List<MonthlyAdvance>) {
                         style = MaterialTheme.typography.labelSmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant
                     )
-                }
-            }
-        }
-    }
-}
-
-@Composable
-fun RecordItemCard(record: WorkRecord, showEmployee: Boolean) {
-    val context = LocalContext.current
-
-    Card(
-        modifier = Modifier.fillMaxWidth(),
-        elevation = CardDefaults.cardElevation(defaultElevation = 2.dp)
-    ) {
-        Column(modifier = Modifier.padding(14.dp)) {
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.SpaceBetween,
-                verticalAlignment = Alignment.CenterVertically
-            ) {
-                Text(
-                    text = "${record.workId} • ${record.date}",
-                    style = MaterialTheme.typography.labelLarge,
-                    color = MaterialTheme.colorScheme.primary,
-                    fontWeight = FontWeight.Bold
-                )
-                AssistChip(
-                    onClick = {},
-                    label = { Text("Visits: ${record.visitCount}") }
-                )
-            }
-
-            if (showEmployee) {
-                Text(
-                    text = "Emp: ${record.employeeName}",
-                    style = MaterialTheme.typography.labelSmall,
-                    color = MaterialTheme.colorScheme.tertiary,
-                    fontWeight = FontWeight.Bold
-                )
-            }
-
-            Text(
-                text = record.customerName,
-                style = MaterialTheme.typography.titleMedium,
-                fontWeight = FontWeight.SemiBold
-            )
-
-            Text(
-                text = "${record.activity} | ${record.location}",
-                style = MaterialTheme.typography.bodyMedium,
-                color = MaterialTheme.colorScheme.onSurfaceVariant
-            )
-
-            Divider(modifier = Modifier.padding(vertical = 8.dp))
-
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.SpaceBetween,
-                verticalAlignment = Alignment.CenterVertically
-            ) {
-                Column {
-                    Text(
-                        text = "Total: ₹${record.totalAmount}  |  Adv: ₹${record.advanceAmount}",
-                        style = MaterialTheme.typography.bodySmall
-                    )
-                    Text(
-                        text = "Pending: ₹${record.pendingAmount}",
-                        style = MaterialTheme.typography.bodyMedium,
-                        fontWeight = FontWeight.Bold,
-                        color = if (record.pendingAmount > 0) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.primary
-                    )
-                }
-
-                IconButton(
-                    onClick = {
-                        val intent = Intent(Intent.ACTION_DIAL, Uri.parse("tel:${record.phoneNumber}"))
-                        context.startActivity(intent)
-                    }
-                ) {
-                    Icon(Icons.Default.Call, contentDescription = "Call Customer", tint = MaterialTheme.colorScheme.primary)
                 }
             }
         }
