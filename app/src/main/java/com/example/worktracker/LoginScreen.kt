@@ -18,6 +18,7 @@ import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.unit.dp
 
+@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun LoginScreen(viewModel: WorkViewModel) {
     var selectedRole by remember { mutableStateOf(UserRole.USER) }
@@ -26,7 +27,7 @@ fun LoginScreen(viewModel: WorkViewModel) {
 
     val masterEmployees by viewModel.masterEmployees.collectAsState()
     
-    // Filter to ONLY ACTIVE employee names for user login
+    // Filter to ONLY ACTIVE employee names for technician login
     val activeEmployeeNames = remember(masterEmployees) {
         masterEmployees.filter { it.isActive }.map { it.name }
     }
@@ -61,7 +62,7 @@ fun LoginScreen(viewModel: WorkViewModel) {
 
         Spacer(modifier = Modifier.height(32.dp))
 
-        // Role Tab Switcher (Field User vs Admin)
+        // Role Tab Switcher (Field Technician vs Admin)
         SingleChoiceSegmentedButtonRow(modifier = Modifier.fillMaxWidth()) {
             SegmentedButton(
                 selected = selectedRole == UserRole.USER,
