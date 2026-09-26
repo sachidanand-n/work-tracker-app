@@ -11,6 +11,7 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withTimeoutOrNull
 import java.text.SimpleDateFormat
 import java.util.Calendar
 import java.util.Locale
@@ -34,11 +35,12 @@ class WorkViewModel : ViewModel() {
     val visitCounts: List<String> = listOf("1", "2", "3", "4", "5+")
     val pastDates: List<String> = generateDatesList()
 
-    // Sync Percentage & Progress
+    // Sync Percentage, Progress, and Error Tracking
     val isSyncing = MutableStateFlow(false)
-    val syncProgress = MutableStateFlow(0f)         // 0.0f to 1.0f for progress bar
-    val syncPercentage = MutableStateFlow("0%")     // "0%" to "100%"
+    val syncProgress = MutableStateFlow(0f)
+    val syncPercentage = MutableStateFlow("0%")
     val syncStatusMessage = MutableStateFlow("")
+    val syncHasError = MutableStateFlow(false)
 
     private val _records = MutableStateFlow<List<WorkRecord>>(emptyList())
     val records: StateFlow<List<WorkRecord>> = _records.asStateFlow()
@@ -59,7 +61,12 @@ class WorkViewModel : ViewModel() {
 
     private fun listenToMasterData() {
         masterDoc.addSnapshotListener { snapshot, error ->
-            if (error != null || snapshot == null || !snapshot.exists()) return@addSnapshotListener
+            if (error != null) {
+                syncStatusMessage.value = "Cloud listener error: ${error.message}"
+                return@addSnapshotListener
+            }
+            if (snapshot == null || !snapshot.exists()) return@addSnapshotListener
+
             val cloudEmployees = snapshot.get("employees") as? List<*>
             val cloudWorkIds = snapshot.get("workIds") as? List<*>
             val cloudActivities = snapshot.get("activities") as? List<*>
@@ -82,23 +89,23 @@ class WorkViewModel : ViewModel() {
             }
     }
 
-    // Percentage-Tracked Cloud Sync
     fun syncMasterDataToCloud() {
         viewModelScope.launch {
             isSyncing.value = true
+            syncHasError.value = false
             syncProgress.value = 0.15f
             syncPercentage.value = "15%"
             syncStatusMessage.value = "Validating master database..."
-            delay(250)
+            delay(200)
 
             syncProgress.value = 0.45f
             syncPercentage.value = "45%"
             syncStatusMessage.value = "Packaging Work IDs & Activities..."
-            delay(250)
+            delay(200)
 
             syncProgress.value = 0.70f
             syncPercentage.value = "70%"
-            syncStatusMessage.value = "Transmitting to Google Cloud..."
+            syncStatusMessage.value = "Uploading to Cloud Firestore..."
 
             val payload = hashMapOf(
                 "employees" to masterEmployees.value,
@@ -106,17 +113,39 @@ class WorkViewModel : ViewModel() {
                 "activities" to masterActivities.value
             )
 
-            masterDoc.set(payload, SetOptions.merge())
-                .addOnSuccessListener {
-                    syncProgress.value = 1.0f
-                    syncPercentage.value = "100%"
-                    syncStatusMessage.value = "100% Synced! Available on all field devices."
-                    isSyncing.value = false
+            val completed = withTimeoutOrNull(8000) {
+                var finished = false
+                masterDoc.set(payload, SetOptions.merge())
+                    .addOnSuccessListener {
+                        syncProgress.value = 1.0f
+                        syncPercentage.value = "100%"
+                        syncStatusMessage.value = "100% Synced! Available on all field devices."
+                        syncHasError.value = false
+                        isSyncing.value = false
+                        finished = true
+                    }
+                    .addOnFailureListener { e ->
+                        syncProgress.value = 0f
+                        syncPercentage.value = "Failed"
+                        syncStatusMessage.value = "Error: ${e.localizedMessage ?: "Permission Denied"}"
+                        syncHasError.value = true
+                        isSyncing.value = false
+                        finished = true
+                    }
+
+                while (!finished) {
+                    delay(100)
                 }
-                .addOnFailureListener { e ->
-                    isSyncing.value = false
-                    syncStatusMessage.value = "Sync failed: ${e.localizedMessage}"
-                }
+                true
+            }
+
+            if (completed == null && isSyncing.value) {
+                syncProgress.value = 0f
+                syncPercentage.value = "Timeout"
+                syncStatusMessage.value = "Connection timed out. Check phone internet or Firestore rules."
+                syncHasError.value = true
+                isSyncing.value = false
+            }
         }
     }
 
@@ -125,6 +154,7 @@ class WorkViewModel : ViewModel() {
         if (trimmed.isNotBlank() && !masterEmployees.value.contains(trimmed)) {
             masterEmployees.value = masterEmployees.value + trimmed
             syncStatusMessage.value = "Unsaved changes! Click 'Sync' to publish."
+            syncHasError.value = false
         }
     }
 
@@ -133,6 +163,7 @@ class WorkViewModel : ViewModel() {
         if (trimmed.isNotBlank() && !masterWorkIds.value.contains(trimmed)) {
             masterWorkIds.value = masterWorkIds.value + trimmed
             syncStatusMessage.value = "Unsaved changes! Click 'Sync' to publish."
+            syncHasError.value = false
         }
     }
 
@@ -141,6 +172,7 @@ class WorkViewModel : ViewModel() {
         if (trimmed.isNotBlank() && !masterActivities.value.contains(trimmed)) {
             masterActivities.value = masterActivities.value + trimmed
             syncStatusMessage.value = "Unsaved changes! Click 'Sync' to publish."
+            syncHasError.value = false
         }
     }
 
