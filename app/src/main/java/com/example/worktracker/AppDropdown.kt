@@ -27,17 +27,20 @@ fun AppDropdown(
             readOnly = true,
             label = { Text(label) },
             trailingIcon = { ExposedDropdownMenuDefaults.TrailingIcon(expanded = expanded) },
-            modifier = Modifier.menuAnchor().fillMaxWidth()
+            modifier = Modifier
+                .menuAnchor()
+                .fillMaxWidth()
         )
+
         ExposedDropdownMenu(
             expanded = expanded,
             onDismissRequest = { expanded = false }
         ) {
-            options.forEach { selection ->
+            options.forEach { item ->
                 DropdownMenuItem(
-                    text = { Text(selection) },
+                    text = { Text(item) },
                     onClick = {
-                        onOptionSelected(selection)
+                        onOptionSelected(item)
                         expanded = false
                     }
                 )
