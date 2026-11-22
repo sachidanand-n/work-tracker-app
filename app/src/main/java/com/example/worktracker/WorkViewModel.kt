@@ -28,7 +28,6 @@ class WorkViewModel : ViewModel() {
     private val _loggedInEmployee = MutableStateFlow("")
     val loggedInEmployee: StateFlow<String> = _loggedInEmployee.asStateFlow()
 
-    // Master Items with Active / In-Active flag
     val masterEmployees = MutableStateFlow<List<MasterItem>>(
         listOf(
             MasterItem("Ramesh Kumar", true),
@@ -79,11 +78,13 @@ class WorkViewModel : ViewModel() {
     )
     val formState: StateFlow<EntryFormState> = _formState.asStateFlow()
 
+    // Filters & Calendar Selection
     val searchQuery = MutableStateFlow("")
     val selectedDistrictFilter = MutableStateFlow("All")
     val selectedActivityFilter = MutableStateFlow("All")
     val selectedWorkIdFilter = MutableStateFlow("All")
     val selectedEmployeeFilter = MutableStateFlow("All")
+    val selectedCalendarDate = MutableStateFlow<String?>(null) // Format: "dd-MMM-yy"
 
     init {
         listenToMasterData()
@@ -138,7 +139,6 @@ class WorkViewModel : ViewModel() {
             }
     }
 
-    // Toggle Active / In-Active
     fun toggleEmployeeStatus(name: String) {
         masterEmployees.value = masterEmployees.value.map {
             if (it.name == name) it.copy(isActive = !it.isActive) else it
@@ -256,6 +256,10 @@ class WorkViewModel : ViewModel() {
         }
     }
 
+    fun toggleCalendarDate(dateStr: String) {
+        selectedCalendarDate.value = if (selectedCalendarDate.value == dateStr) null else dateStr
+    }
+
     fun saveRecord(): Boolean {
         val s = _formState.value
         if (s.customerName.isBlank() || s.phoneNumber.length != 10 || !s.phoneNumber.all { char -> char.isDigit() }) {
@@ -304,6 +308,7 @@ class WorkViewModel : ViewModel() {
     fun logout() {
         _currentUserRole.value = UserRole.NONE
         _loggedInEmployee.value = ""
+        selectedCalendarDate.value = null
         resetFormToDefaults()
     }
 
@@ -321,6 +326,7 @@ class WorkViewModel : ViewModel() {
         selectedActivityFilter.value = "All"
         selectedWorkIdFilter.value = "All"
         selectedEmployeeFilter.value = "All"
+        selectedCalendarDate.value = null
     }
 
     private fun resetFormToDefaults() {
@@ -338,7 +344,8 @@ class WorkViewModel : ViewModel() {
         )
     }
 
-    val visibleRecords = combine(
+    // Slicer-filtered records (before calendar date filter, used to populate calendar superscript counts)
+    val slicerFilteredRecords = combine(
         _records,
         _currentUserRole,
         _loggedInEmployee,
@@ -373,6 +380,15 @@ class WorkViewModel : ViewModel() {
                 record.employeeName.contains(inter.query, ignoreCase = true)
 
             matchDist && matchAct && matchWork && matchQuery
+        }
+    }
+
+    // Final records shown in the list (incorporates calendar date filter if selected)
+    val visibleRecords = combine(slicerFilteredRecords, selectedCalendarDate) { recs, calDate ->
+        if (calDate == null) {
+            recs
+        } else {
+            recs.filter { it.date.equals(calDate, ignoreCase = true) }
         }
     }
 }
