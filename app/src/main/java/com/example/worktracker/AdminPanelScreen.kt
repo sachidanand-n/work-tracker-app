@@ -53,6 +53,41 @@ fun AdminPanelScreen(viewModel: WorkViewModel) {
         viewModel.lookupPincodeDetails(newPincode)
     }
 
+    // State for compact Enrolled Pincode Dropdown
+    var selectedManagePin by remember { mutableStateOf("") }
+    LaunchedEffect(pincodes) {
+        if (selectedManagePin.isEmpty() || pincodes.none { it.name == selectedManagePin }) {
+            selectedManagePin = pincodes.firstOrNull()?.name ?: ""
+        }
+    }
+
+    val dropdownOptions = remember(pincodes) {
+        pincodes.map { item ->
+            val details = viewModel.lookupPincodeDetails(item.name)
+            val statusTag = if (item.isActive) "Active" else "In-Active"
+            if (details != null) {
+                "${item.name} - ${details.first}, ${details.second} ($statusTag)"
+            } else {
+                "${item.name} ($statusTag)"
+            }
+        }
+    }
+
+    val selectedDropdownDisplay = remember(selectedManagePin, pincodes) {
+        val item = pincodes.find { it.name == selectedManagePin }
+        if (item != null) {
+            val details = viewModel.lookupPincodeDetails(item.name)
+            val statusTag = if (item.isActive) "Active" else "In-Active"
+            if (details != null) {
+                "${item.name} - ${details.first}, ${details.second} ($statusTag)"
+            } else {
+                "${item.name} ($statusTag)"
+            }
+        } else {
+            ""
+        }
+    }
+
     Column(
         modifier = Modifier
             .fillMaxSize()
@@ -181,10 +216,10 @@ fun AdminPanelScreen(viewModel: WorkViewModel) {
             }
         }
 
-        // --- 3. ENROLL PINCODE (AUTO FETCH PLACE & DISTRICT FROM DATABASE) ---
+        // --- 3. ENROLL & MANAGE PINCODE (COMPACT DROPDOWN VIEW) ---
         ElevatedCard(modifier = Modifier.fillMaxWidth()) {
             Column(modifier = Modifier.padding(16.dp)) {
-                Text("Enroll Pincode (Auto Place & District)", fontWeight = FontWeight.SemiBold)
+                Text("Pincode Master (Auto Place & District)", fontWeight = FontWeight.SemiBold)
                 Spacer(modifier = Modifier.height(8.dp))
 
                 OutlinedTextField(
@@ -194,7 +229,7 @@ fun AdminPanelScreen(viewModel: WorkViewModel) {
                             newPincode = input
                         }
                     },
-                    label = { Text("Enter 6-Digit Pincode (e.g. 641601)") },
+                    label = { Text("Enroll New 6-Digit Pincode (e.g. 641601)") },
                     keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
                     supportingText = {
                         if (newPincode.length == 6 && autoFetchedLocation == null) {
@@ -230,7 +265,9 @@ fun AdminPanelScreen(viewModel: WorkViewModel) {
 
                 Button(
                     onClick = {
-                        if (viewModel.addMasterPincode(newPincode)) {
+                        val enrolledPin = newPincode.trim()
+                        if (viewModel.addMasterPincode(enrolledPin)) {
+                            selectedManagePin = enrolledPin
                             newPincode = ""
                         }
                     },
@@ -239,26 +276,41 @@ fun AdminPanelScreen(viewModel: WorkViewModel) {
                     Text("Enroll Pincode")
                 }
 
-                Spacer(modifier = Modifier.height(12.dp))
+                Divider(modifier = Modifier.padding(vertical = 12.dp))
+
                 Text(
-                    text = "Enrolled Pincodes (${pincodes.count { it.isActive }} Active):",
+                    text = "Manage Enrolled Pincodes (${pincodes.count { it.isActive }} Active / ${pincodes.size} Total):",
                     style = MaterialTheme.typography.labelMedium,
                     fontWeight = FontWeight.Bold
                 )
-                Spacer(modifier = Modifier.height(4.dp))
+                Spacer(modifier = Modifier.height(8.dp))
 
-                // Show top 15 enrolled pincodes with toggle controls
-                pincodes.take(15).forEach { item ->
-                    val details = viewModel.lookupPincodeDetails(item.name)
-                    val displayLabel = if (details != null) {
-                        "${item.name} — ${details.first}, ${details.second}"
-                    } else {
-                        item.name
-                    }
-                    MasterItemStatusRow(
-                        item = item.copy(name = displayLabel),
-                        onToggle = { viewModel.togglePincodeStatus(item.name) }
+                // Compact Dropdown instead of long vertical list
+                if (dropdownOptions.isNotEmpty()) {
+                    AppDropdown(
+                        label = "Select Pincode to Toggle Status",
+                        options = dropdownOptions,
+                        selectedOption = selectedDropdownDisplay,
+                        onOptionSelected = { selectedOption ->
+                            val extractedPin = selectedOption.substringBefore(" - ").substringBefore(" (").trim()
+                            selectedManagePin = extractedPin
+                        }
                     )
+
+                    val activeItem = pincodes.find { it.name == selectedManagePin }
+                    if (activeItem != null) {
+                        Spacer(modifier = Modifier.height(8.dp))
+                        val details = viewModel.lookupPincodeDetails(activeItem.name)
+                        val label = if (details != null) {
+                            "${activeItem.name} — ${details.first}, ${details.second}"
+                        } else {
+                            activeItem.name
+                        }
+                        MasterItemStatusRow(
+                            item = activeItem.copy(name = label),
+                            onToggle = { viewModel.togglePincodeStatus(activeItem.name) }
+                        )
+                    }
                 }
             }
         }
