@@ -7,6 +7,7 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.AutoFixHigh
@@ -21,6 +22,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
 import androidx.core.content.FileProvider
 import java.io.File
@@ -32,10 +34,12 @@ fun AdminPanelScreen(viewModel: WorkViewModel) {
     var newEmployee by remember { mutableStateOf("") }
     var newWorkId by remember { mutableStateOf("") }
     var newActivity by remember { mutableStateOf("") }
+    var newPincode by remember { mutableStateOf("") }
 
     val employees by viewModel.masterEmployees.collectAsState()
     val workIds by viewModel.masterWorkIds.collectAsState()
     val activities by viewModel.masterActivities.collectAsState()
+    val pincodes by viewModel.masterPincodes.collectAsState()
     val allRecords by viewModel.records.collectAsState()
 
     val isSyncing by viewModel.isSyncing.collectAsState()
@@ -43,6 +47,11 @@ fun AdminPanelScreen(viewModel: WorkViewModel) {
     val percentage by viewModel.syncPercentage.collectAsState()
     val syncStatus by viewModel.syncStatusMessage.collectAsState()
     val hasError by viewModel.syncHasError.collectAsState()
+
+    // Auto-fetched Place & District from embedded database when Admin types a Pincode
+    val autoFetchedLocation = remember(newPincode) {
+        viewModel.lookupPincodeDetails(newPincode)
+    }
 
     Column(
         modifier = Modifier
@@ -99,7 +108,7 @@ fun AdminPanelScreen(viewModel: WorkViewModel) {
                 ) {
                     Icon(Icons.Default.AutoFixHigh, contentDescription = null, modifier = Modifier.size(18.dp))
                     Spacer(modifier = Modifier.width(8.dp))
-                    Text("Merge & Standardize Associates & Activities")
+                    Text("Standardize Customers, Associates & Activities")
                 }
 
                 if (isSyncing || progress > 0f || hasError || syncStatus.isNotEmpty()) {
@@ -172,7 +181,89 @@ fun AdminPanelScreen(viewModel: WorkViewModel) {
             }
         }
 
-        // --- 3. ASSOCIATES / EMPLOYEES (AUTO PROPER CASE) ---
+        // --- 3. ENROLL PINCODE (AUTO FETCH PLACE & DISTRICT FROM DATABASE) ---
+        ElevatedCard(modifier = Modifier.fillMaxWidth()) {
+            Column(modifier = Modifier.padding(16.dp)) {
+                Text("Enroll Pincode (Auto Place & District)", fontWeight = FontWeight.SemiBold)
+                Spacer(modifier = Modifier.height(8.dp))
+
+                OutlinedTextField(
+                    value = newPincode,
+                    onValueChange = { input ->
+                        if (input.length <= 6 && input.all { it.isDigit() }) {
+                            newPincode = input
+                        }
+                    },
+                    label = { Text("Enter 6-Digit Pincode (e.g. 641601)") },
+                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
+                    supportingText = {
+                        if (newPincode.length == 6 && autoFetchedLocation == null) {
+                            Text("Pincode not found in database", color = MaterialTheme.colorScheme.error)
+                        }
+                    },
+                    modifier = Modifier.fillMaxWidth()
+                )
+
+                Spacer(modifier = Modifier.height(8.dp))
+
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    OutlinedTextField(
+                        value = autoFetchedLocation?.first ?: "",
+                        onValueChange = {},
+                        readOnly = true,
+                        label = { Text("Place (Auto)") },
+                        modifier = Modifier.weight(1.2f)
+                    )
+                    OutlinedTextField(
+                        value = autoFetchedLocation?.second ?: "",
+                        onValueChange = {},
+                        readOnly = true,
+                        label = { Text("District (Auto)") },
+                        modifier = Modifier.weight(1f)
+                    )
+                }
+
+                Spacer(modifier = Modifier.height(8.dp))
+
+                Button(
+                    onClick = {
+                        if (viewModel.addMasterPincode(newPincode)) {
+                            newPincode = ""
+                        }
+                    },
+                    enabled = autoFetchedLocation != null
+                ) {
+                    Text("Enroll Pincode")
+                }
+
+                Spacer(modifier = Modifier.height(12.dp))
+                Text(
+                    text = "Enrolled Pincodes (${pincodes.count { it.isActive }} Active):",
+                    style = MaterialTheme.typography.labelMedium,
+                    fontWeight = FontWeight.Bold
+                )
+                Spacer(modifier = Modifier.height(4.dp))
+
+                // Show top 15 enrolled pincodes with toggle controls
+                pincodes.take(15).forEach { item ->
+                    val details = viewModel.lookupPincodeDetails(item.name)
+                    val displayLabel = if (details != null) {
+                        "${item.name} — ${details.first}, ${details.second}"
+                    } else {
+                        item.name
+                    }
+                    MasterItemStatusRow(
+                        item = item.copy(name = displayLabel),
+                        onToggle = { viewModel.togglePincodeStatus(item.name) }
+                    )
+                }
+            }
+        }
+
+        // --- 4. ASSOCIATES / EMPLOYEES (AUTO PROPER CASE) ---
         ElevatedCard(modifier = Modifier.fillMaxWidth()) {
             Column(modifier = Modifier.padding(16.dp)) {
                 Text("Associates (Auto Proper Case)", fontWeight = FontWeight.SemiBold)
@@ -208,7 +299,7 @@ fun AdminPanelScreen(viewModel: WorkViewModel) {
             }
         }
 
-        // --- 4. WORK IDS ---
+        // --- 5. WORK IDS ---
         ElevatedCard(modifier = Modifier.fillMaxWidth()) {
             Column(modifier = Modifier.padding(16.dp)) {
                 Text("Work IDs (Active / In-Active)", fontWeight = FontWeight.SemiBold)
@@ -239,7 +330,7 @@ fun AdminPanelScreen(viewModel: WorkViewModel) {
             }
         }
 
-        // --- 5. ACTIVITIES (AUTO PROPER CASE) ---
+        // --- 6. ACTIVITIES (AUTO PROPER CASE) ---
         ElevatedCard(modifier = Modifier.fillMaxWidth()) {
             Column(modifier = Modifier.padding(16.dp)) {
                 Text("Activities (Auto Proper Case)", fontWeight = FontWeight.SemiBold)
@@ -286,7 +377,10 @@ fun MasterItemStatusRow(item: MasterItem, onToggle: () -> Unit) {
         horizontalArrangement = Arrangement.SpaceBetween,
         verticalAlignment = Alignment.CenterVertically
     ) {
-        Row(verticalAlignment = Alignment.CenterVertically) {
+        Row(
+            modifier = Modifier.weight(1f),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
             Box(
                 modifier = Modifier
                     .background(
