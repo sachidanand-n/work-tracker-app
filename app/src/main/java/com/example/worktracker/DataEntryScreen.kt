@@ -1,32 +1,51 @@
 package com.example.worktracker
 
+import android.content.Intent
+import android.net.Uri
+import android.widget.Toast
+import androidx.compose.foundation.BorderStroke
+import androidx.compose.foundation.ExperimentalFoundationApi
+import androidx.compose.foundation.basicMarquee
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.AutoAwesome
+import androidx.compose.material.icons.filled.Campaign
 import androidx.compose.material.icons.filled.Check
+import androidx.compose.material.icons.filled.Close
+import androidx.compose.material.icons.filled.PushPin
+import androidx.compose.material.icons.filled.Send
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardCapitalization
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
+import java.net.URLEncoder
+import java.text.SimpleDateFormat
+import java.util.Locale
 
+@OptIn(ExperimentalFoundationApi::class, ExperimentalLayoutApi::class)
 @Composable
 fun DataEntryScreen(
     viewModel: WorkViewModel,
     onNavigateToDashboard: () -> Unit
 ) {
+    val context = LocalContext.current
     val form by viewModel.formState.collectAsState()
     val userRole by viewModel.currentUserRole.collectAsState()
     val loggedInEmp by viewModel.loggedInEmployee.collectAsState()
     val allRecords by viewModel.records.collectAsState()
+    val associateReminders by viewModel.associateRemindersMap.collectAsState()
 
     val allEmployees by viewModel.masterEmployees.collectAsState()
     val allWorkIds by viewModel.masterWorkIds.collectAsState()
@@ -51,6 +70,11 @@ fun DataEntryScreen(
         } else {
             form.employeeName.ifEmpty { activeEmployees.firstOrNull() ?: "Admin" }
         }
+    }
+
+    // Active scrolling reminder message for this associate
+    val activeReminderText = remember(associateReminders, targetAssociate) {
+        viewModel.getReminderForAssociate(targetAssociate)
     }
 
     Column(
@@ -93,6 +117,52 @@ fun DataEntryScreen(
             }
         }
 
+        // --- SCROLLING REMINDER TICKER FOR USER ---
+        if (activeReminderText.isNotBlank()) {
+            Surface(
+                modifier = Modifier.fillMaxWidth(),
+                color = Color(0xFFFFF8E1),
+                shape = RoundedCornerShape(8.dp),
+                border = BorderStroke(1.dp, Color(0xFFFFB300))
+            ) {
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(horizontal = 10.dp, vertical = 6.dp),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Icon(
+                        imageVector = Icons.Default.Campaign,
+                        contentDescription = "Reminder",
+                        tint = Color(0xFFE65100),
+                        modifier = Modifier.size(18.dp)
+                    )
+                    Spacer(modifier = Modifier.width(8.dp))
+                    Text(
+                        text = activeReminderText,
+                        style = MaterialTheme.typography.bodySmall,
+                        fontWeight = FontWeight.Bold,
+                        color = Color(0xFF4E342E),
+                        maxLines = 1,
+                        modifier = Modifier
+                            .weight(1f)
+                            .basicMarquee(iterations = Int.MAX_VALUE)
+                    )
+                    IconButton(
+                        onClick = { viewModel.setAssociateReminder(targetAssociate, "") },
+                        modifier = Modifier.size(24.dp)
+                    ) {
+                        Icon(
+                            imageVector = Icons.Default.Close,
+                            contentDescription = "Dismiss Reminder",
+                            tint = Color(0xFF4E342E),
+                            modifier = Modifier.size(14.dp)
+                        )
+                    }
+                }
+            }
+        }
+
         if (userRole == UserRole.USER) {
             OutlinedTextField(
                 value = loggedInEmp,
@@ -131,7 +201,6 @@ fun DataEntryScreen(
             onOptionSelected = { selected -> viewModel.updateForm { copy(activity = selected) } }
         )
 
-        // Customer Name enforced in Proper Case
         OutlinedTextField(
             value = form.customerName,
             onValueChange = { input -> viewModel.updateForm { copy(customerName = input) } },
@@ -254,12 +323,13 @@ fun DataEntryScreen(
         }
     }
 
+    // --- ACTIONABLE AI SUMMARY DIALOG ---
     if (showAiSummaryDialog) {
         val personalRecords = remember(allRecords, targetAssociate) {
             allRecords.filter { it.employeeName.equals(targetAssociate, ignoreCase = true) }
         }
-        val insights = remember(personalRecords, targetAssociate) {
-            generateAiSummaryInsights(
+        val insightsData = remember(personalRecords, targetAssociate) {
+            analyzeAiInsightsData(
                 records = personalRecords,
                 scopeDescription = "Associate: $targetAssociate"
             )
@@ -268,17 +338,85 @@ fun DataEntryScreen(
         AlertDialog(
             onDismissRequest = { showAiSummaryDialog = false },
             icon = { Icon(Icons.Default.AutoAwesome, contentDescription = null, tint = MaterialTheme.colorScheme.primary) },
-            title = { Text("AI Summary ($targetAssociate)", fontWeight = FontWeight.Bold) },
+            title = { Text("AI Action Summary ($targetAssociate)", fontWeight = FontWeight.Bold) },
             text = {
                 Column(
                     modifier = Modifier.verticalScroll(rememberScrollState()),
                     verticalArrangement = Arrangement.spacedBy(10.dp)
                 ) {
-                    insights.forEach { bullet ->
+                    insightsData.bullets.forEach { bullet ->
+                        Text(text = "• $bullet", style = MaterialTheme.typography.bodyMedium)
+                    }
+
+                    Divider(modifier = Modifier.padding(vertical = 4.dp))
+                    Text(
+                        text = "Quick Actions",
+                        style = MaterialTheme.typography.labelLarge,
+                        fontWeight = FontWeight.Bold,
+                        color = MaterialTheme.colorScheme.primary
+                    )
+
+                    // Action 1: Pin as Scrolling Reminder on Data Entry Screen
+                    OutlinedButton(
+                        onClick = {
+                            viewModel.setAssociateReminder(targetAssociate, insightsData.recommendedReminderText)
+                            Toast.makeText(context, "Pinned to scrolling reminder bar!", Toast.LENGTH_SHORT).show()
+                            showAiSummaryDialog = false
+                        },
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        Icon(Icons.Default.PushPin, contentDescription = null, modifier = Modifier.size(16.dp))
+                        Spacer(modifier = Modifier.width(6.dp))
+                        Text("Pin as Scrolling Reminder")
+                    }
+
+                    // Action 2: One-Tap WhatsApp Follow-Up for Highest Pending Customer
+                    if (insightsData.topPendingRecord != null && insightsData.topPendingAmount > 0.0) {
+                        val rec = insightsData.topPendingRecord
+                        OutlinedButton(
+                            onClick = {
+                                val msg = "Hello ${rec.customerName}, gentle reminder regarding pending balance of ₹%.0f for ${rec.activity} (Work ID: ${rec.workId}, Date: ${rec.date}).".format(
+                                    insightsData.topPendingAmount
+                                )
+                                val encoded = URLEncoder.encode(msg, "UTF-8")
+                                val waUri = Uri.parse("https://wa.me/91${rec.phoneNumber}?text=$encoded")
+                                context.startActivity(Intent(Intent.ACTION_VIEW, waUri))
+                            },
+                            modifier = Modifier.fillMaxWidth()
+                        ) {
+                            Icon(Icons.Default.Send, contentDescription = null, modifier = Modifier.size(16.dp))
+                            Spacer(modifier = Modifier.width(6.dp))
+                            Text("WhatsApp Payment Reminder (${rec.customerName})")
+                        }
+                    }
+
+                    // Action 3: Clickable Missed Working Dates to Backfill Immediately
+                    if (insightsData.missedDatesDdMmYy.isNotEmpty()) {
                         Text(
-                            text = "• $bullet",
-                            style = MaterialTheme.typography.bodyMedium
+                            text = "Tap a missed date to backfill entry:",
+                            style = MaterialTheme.typography.labelSmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
                         )
+                        FlowRow(
+                            horizontalArrangement = Arrangement.spacedBy(6.dp),
+                            verticalArrangement = Arrangement.spacedBy(4.dp)
+                        ) {
+                            insightsData.missedDatesDdMmYy.take(8).forEach { ddMmYy ->
+                                AssistChip(
+                                    onClick = {
+                                        val converted = convertDdMmYyToDropdownFormat(ddMmYy)
+                                        if (viewModel.pastDates.contains(converted)) {
+                                            viewModel.updateForm { copy(date = converted) }
+                                            Toast.makeText(context, "Date set to $converted", Toast.LENGTH_SHORT).show()
+                                            showAiSummaryDialog = false
+                                        } else {
+                                            Toast.makeText(context, "Date $converted is older than 30 days", Toast.LENGTH_SHORT).show()
+                                        }
+                                    },
+                                    label = { Text(ddMmYy, style = MaterialTheme.typography.labelSmall) }
+                                )
+                            }
+                        }
                     }
                 }
             },
@@ -290,3 +428,8 @@ fun DataEntryScreen(
         )
     }
 }
+
+private fun convertDdMmYyToDropdownFormat(ddMmYy: String): String {
+    return try {
+        val inFmt = SimpleDateFormat("dd-MM-yy", Locale.ENGLISH)
+        val outFmt = SimpleDateFormat
