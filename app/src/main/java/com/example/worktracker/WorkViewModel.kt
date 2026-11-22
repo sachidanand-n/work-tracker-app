@@ -80,6 +80,7 @@ class WorkViewModel : ViewModel() {
 
     // Filters & Calendar Selection
     val searchQuery = MutableStateFlow("")
+    val selectedMonthFilter = MutableStateFlow("All")      // Format: "MMM-yy" e.g., "Nov-26"
     val selectedDistrictFilter = MutableStateFlow("All")
     val selectedActivityFilter = MutableStateFlow("All")
     val selectedWorkIdFilter = MutableStateFlow("All")
@@ -322,6 +323,7 @@ class WorkViewModel : ViewModel() {
 
     fun resetFilters() {
         searchQuery.value = ""
+        selectedMonthFilter.value = "All"
         selectedDistrictFilter.value = "All"
         selectedActivityFilter.value = "All"
         selectedWorkIdFilter.value = "All"
@@ -344,7 +346,7 @@ class WorkViewModel : ViewModel() {
         )
     }
 
-    // Slicer-filtered records (before calendar date filter, used to populate calendar superscript counts)
+    // Slicer-filtered records (includes Month slicer, excludes Calendar Day selection)
     val slicerFilteredRecords = combine(
         _records,
         _currentUserRole,
@@ -354,11 +356,11 @@ class WorkViewModel : ViewModel() {
     ) { recs: List<WorkRecord>, role: UserRole, emp: String, query: String, dist: String ->
         FilterIntermediate(recs, role, emp, query, dist)
     }.combine(
-        combine(selectedActivityFilter, selectedWorkIdFilter, selectedEmployeeFilter) { act: String, work: String, targetEmp: String ->
-            Triple(act, work, targetEmp)
+        combine(selectedActivityFilter, selectedWorkIdFilter, selectedEmployeeFilter, selectedMonthFilter) { act, work, targetEmp, month ->
+            QuadFilter(act, work, targetEmp, month)
         }
-    ) { inter: FilterIntermediate, trio: Triple<String, String, String> ->
-        val (act, work, targetEmp) = trio
+    ) { inter: FilterIntermediate, quad: QuadFilter ->
+        val (act, work, targetEmp, month) = quad
         val roleFiltered = if (inter.role == UserRole.USER) {
             inter.recs.filter { it.employeeName.equals(inter.emp, ignoreCase = true) }
         } else {
@@ -366,6 +368,8 @@ class WorkViewModel : ViewModel() {
         }
 
         roleFiltered.filter { record ->
+            val recordMonth = extractMonthYear(record.date)
+            val matchMonth = month == "All" || recordMonth.equals(month, ignoreCase = true)
             val matchDist = inter.loc == "All" || record.district.equals(inter.loc, ignoreCase = true)
             val matchAct = act == "All" || record.activity == act
             val matchWork = work == "All" || record.workId == work
@@ -379,7 +383,7 @@ class WorkViewModel : ViewModel() {
                 record.location.contains(inter.query, ignoreCase = true) ||
                 record.employeeName.contains(inter.query, ignoreCase = true)
 
-            matchDist && matchAct && matchWork && matchQuery
+            matchMonth && matchDist && matchAct && matchWork && matchQuery
         }
     }
 
@@ -400,6 +404,18 @@ data class FilterIntermediate(
     val query: String,
     val loc: String
 )
+
+data class QuadFilter(
+    val act: String,
+    val work: String,
+    val targetEmp: String,
+    val month: String
+)
+
+fun extractMonthYear(dateStr: String): String {
+    val parts = dateStr.split("-")
+    return if (parts.size == 3) "${parts[1]}-${parts[2]}" else dateStr
+}
 
 private fun generateDatesList(): List<String> {
     val dates = mutableListOf<String>()
