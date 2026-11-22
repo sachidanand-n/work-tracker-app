@@ -9,6 +9,7 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.AutoFixHigh
 import androidx.compose.material.icons.filled.FileDownload
 import androidx.compose.material.icons.filled.Sync
 import androidx.compose.material3.*
@@ -89,7 +90,19 @@ fun AdminPanelScreen(viewModel: WorkViewModel) {
                     Text(if (isSyncing) "Synchronizing ($percentage)..." else "Sync to All Devices")
                 }
 
-                if (isSyncing || progress > 0f || hasError) {
+                Spacer(modifier = Modifier.height(8.dp))
+
+                OutlinedButton(
+                    onClick = { viewModel.standardizeAndMergeActivitiesInCloud() },
+                    modifier = Modifier.fillMaxWidth(),
+                    enabled = !isSyncing
+                ) {
+                    Icon(Icons.Default.AutoFixHigh, contentDescription = null, modifier = Modifier.size(18.dp))
+                    Spacer(modifier = Modifier.width(8.dp))
+                    Text("Merge & Standardize Activities (Proper Case)")
+                }
+
+                if (isSyncing || progress > 0f || hasError || syncStatus.isNotEmpty()) {
                     Spacer(modifier = Modifier.height(12.dp))
                     Row(
                         modifier = Modifier.fillMaxWidth(),
@@ -111,7 +124,7 @@ fun AdminPanelScreen(viewModel: WorkViewModel) {
                             color = if (hasError) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.primary
                         )
                     }
-                    if (!hasError) {
+                    if (!hasError && (isSyncing || progress > 0f)) {
                         Spacer(modifier = Modifier.height(6.dp))
                         LinearProgressIndicator(
                             progress = { progress },
@@ -221,15 +234,20 @@ fun AdminPanelScreen(viewModel: WorkViewModel) {
             }
         }
 
-        // --- 5. ACTIVITIES (ACTIVE / IN-ACTIVE) ---
+        // --- 5. ACTIVITIES (ACTIVE / IN-ACTIVE + AUTO PROPER CASE) ---
         ElevatedCard(modifier = Modifier.fillMaxWidth()) {
             Column(modifier = Modifier.padding(16.dp)) {
-                Text("Activities (Active / In-Active)", fontWeight = FontWeight.SemiBold)
+                Text("Activities (Auto Proper Case)", fontWeight = FontWeight.SemiBold)
                 Spacer(modifier = Modifier.height(8.dp))
                 OutlinedTextField(
                     value = newActivity,
                     onValueChange = { newActivity = it },
                     label = { Text("e.g. Quality Inspection") },
+                    supportingText = {
+                        if (newActivity.isNotBlank()) {
+                            Text("Will be saved as: ${viewModel.formatProperCase(newActivity)}")
+                        }
+                    },
                     modifier = Modifier.fillMaxWidth()
                 )
                 Spacer(modifier = Modifier.height(8.dp))
@@ -291,7 +309,7 @@ fun MasterItemStatusRow(item: MasterItem, onToggle: () -> Unit) {
 }
 
 private fun shareRecordsAsCsv(context: Context, records: List<WorkRecord>) {
-    val headers = "Work ID,Date,Employee Name,Customer Name,Phone Number,Pincode,Place,District,Visit Count,Total Amount,Advance Amount,Pending Amount\n"
+    val headers = "Work ID,Date,Employee Name,Customer Name,Phone Number,Pincode,Place,District,Activity,Visit Count,Total Amount,Advance Amount,Pending Amount\n"
 
     val rows = records.joinToString("\n") { record ->
         val safeCustomer = record.customerName.replace("\"", "\"\"")
@@ -300,7 +318,7 @@ private fun shareRecordsAsCsv(context: Context, records: List<WorkRecord>) {
         val safeEmployee = record.employeeName.replace("\"", "\"\"")
         val safeActivity = record.activity.replace("\"", "\"\"")
 
-        "\"${record.workId}\",\"${record.date}\",\"$safeEmployee\",\"$safeCustomer\",\"${record.phoneNumber}\",\"${record.pincode}\",\"$safePlace\",\"$safeDistrict\",\"${record.visitCount}\",${record.totalAmount},${record.advanceAmount},${record.pendingAmount}"
+        "\"${record.workId}\",\"${record.date}\",\"$safeEmployee\",\"$safeCustomer\",\"${record.phoneNumber}\",\"${record.pincode}\",\"$safePlace\",\"$safeDistrict\",\"$safeActivity\",\"${record.visitCount}\",${record.totalAmount},${record.advanceAmount},${record.pendingAmount}"
     }
 
     val csvContent = headers + rows
