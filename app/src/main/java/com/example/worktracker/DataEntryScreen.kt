@@ -5,11 +5,13 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.AutoAwesome
 import androidx.compose.material.icons.filled.Check
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.setValue
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardType
@@ -23,8 +25,8 @@ fun DataEntryScreen(
     val form by viewModel.formState.collectAsState()
     val userRole by viewModel.currentUserRole.collectAsState()
     val loggedInEmp by viewModel.loggedInEmployee.collectAsState()
+    val allRecords by viewModel.records.collectAsState()
 
-    // Filter to ONLY ACTIVE items for data entry
     val allEmployees by viewModel.masterEmployees.collectAsState()
     val allWorkIds by viewModel.masterWorkIds.collectAsState()
     val allActivities by viewModel.masterActivities.collectAsState()
@@ -37,6 +39,16 @@ fun DataEntryScreen(
 
     val isPhoneValid = form.phoneNumber.length == 10 && form.phoneNumber.all { char -> char.isDigit() }
     var submitError by remember { mutableStateOf(false) }
+    var showAiSummaryDialog by remember { mutableStateOf(false) }
+
+    // Determine the associate whose summary should be shown
+    val targetAssociate = remember(userRole, loggedInEmp, form.employeeName, activeEmployees) {
+        if (userRole == UserRole.USER) {
+            loggedInEmp
+        } else {
+            form.employeeName.ifEmpty { activeEmployees.firstOrNull() ?: "Admin" }
+        }
+    }
 
     Column(
         modifier = Modifier
@@ -45,7 +57,38 @@ fun DataEntryScreen(
             .padding(16.dp),
         verticalArrangement = Arrangement.spacedBy(12.dp)
     ) {
-        Text("Create Work Record", style = MaterialTheme.typography.headlineMedium, fontWeight = FontWeight.Bold)
+        // --- HEADER WITH "AI SUMMARY" IN TOP RIGHT CORNER ---
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Text(
+                text = "Create Work Record",
+                style = MaterialTheme.typography.headlineSmall,
+                fontWeight = FontWeight.Bold,
+                modifier = Modifier.weight(1f)
+            )
+
+            Spacer(modifier = Modifier.width(8.dp))
+
+            FilledTonalButton(
+                onClick = { showAiSummaryDialog = true },
+                contentPadding = PaddingValues(horizontal = 12.dp, vertical = 8.dp)
+            ) {
+                Icon(
+                    imageVector = Icons.Default.AutoAwesome,
+                    contentDescription = "AI Summary",
+                    modifier = Modifier.size(16.dp)
+                )
+                Spacer(modifier = Modifier.width(6.dp))
+                Text(
+                    text = "AI Summary",
+                    style = MaterialTheme.typography.labelMedium,
+                    fontWeight = FontWeight.Bold
+                )
+            }
+        }
 
         if (userRole == UserRole.USER) {
             OutlinedTextField(
@@ -92,7 +135,6 @@ fun DataEntryScreen(
             modifier = Modifier.fillMaxWidth()
         )
 
-        // --- SPLIT LOCATION (PINCODE, PLACE, DISTRICT) ---
         Text(
             text = "Location Details",
             style = MaterialTheme.typography.titleSmall,
@@ -200,5 +242,42 @@ fun DataEntryScreen(
             Spacer(modifier = Modifier.width(8.dp))
             Text("Save Entry")
         }
+    }
+
+    // --- ASSOCIATE PERSONAL AI SUMMARY DIALOG ---
+    if (showAiSummaryDialog) {
+        val personalRecords = remember(allRecords, targetAssociate) {
+            allRecords.filter { it.employeeName.equals(targetAssociate, ignoreCase = true) }
+        }
+        val insights = remember(personalRecords, targetAssociate) {
+            generateAiSummaryInsights(
+                records = personalRecords,
+                scopeDescription = "Associate: $targetAssociate"
+            )
+        }
+
+        AlertDialog(
+            onDismissRequest = { showAiSummaryDialog = false },
+            icon = { Icon(Icons.Default.AutoAwesome, contentDescription = null, tint = MaterialTheme.colorScheme.primary) },
+            title = { Text("AI Summary ($targetAssociate)", fontWeight = FontWeight.Bold) },
+            text = {
+                Column(
+                    modifier = Modifier.verticalScroll(rememberScrollState()),
+                    verticalArrangement = Arrangement.spacedBy(10.dp)
+                ) {
+                    insights.forEach { bullet ->
+                        Text(
+                            text = "• $bullet",
+                            style = MaterialTheme.typography.bodyMedium
+                        )
+                    }
+                }
+            },
+            confirmButton = {
+                Button(onClick = { showAiSummaryDialog = false }) {
+                    Text("Close")
+                }
+            }
+        )
     }
 }
