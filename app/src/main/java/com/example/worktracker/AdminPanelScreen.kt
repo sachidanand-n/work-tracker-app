@@ -93,13 +93,13 @@ fun AdminPanelScreen(viewModel: WorkViewModel) {
                 Spacer(modifier = Modifier.height(8.dp))
 
                 OutlinedButton(
-                    onClick = { viewModel.standardizeAndMergeActivitiesInCloud() },
+                    onClick = { viewModel.standardizeAndMergeMasterDataInCloud() },
                     modifier = Modifier.fillMaxWidth(),
                     enabled = !isSyncing
                 ) {
                     Icon(Icons.Default.AutoFixHigh, contentDescription = null, modifier = Modifier.size(18.dp))
                     Spacer(modifier = Modifier.width(8.dp))
-                    Text("Merge & Standardize Activities (Proper Case)")
+                    Text("Merge & Standardize Associates & Activities")
                 }
 
                 if (isSyncing || progress > 0f || hasError || syncStatus.isNotEmpty()) {
@@ -172,15 +172,20 @@ fun AdminPanelScreen(viewModel: WorkViewModel) {
             }
         }
 
-        // --- 3. EMPLOYEES (ACTIVE / IN-ACTIVE) ---
+        // --- 3. ASSOCIATES / EMPLOYEES (AUTO PROPER CASE) ---
         ElevatedCard(modifier = Modifier.fillMaxWidth()) {
             Column(modifier = Modifier.padding(16.dp)) {
-                Text("Employees (Active / In-Active)", fontWeight = FontWeight.SemiBold)
+                Text("Associates (Auto Proper Case)", fontWeight = FontWeight.SemiBold)
                 Spacer(modifier = Modifier.height(8.dp))
                 OutlinedTextField(
                     value = newEmployee,
                     onValueChange = { newEmployee = it },
-                    label = { Text("Employee Name") },
+                    label = { Text("Associate Name") },
+                    supportingText = {
+                        if (newEmployee.isNotBlank()) {
+                            Text("Will be saved as: ${viewModel.formatProperCase(newEmployee)}")
+                        }
+                    },
                     modifier = Modifier.fillMaxWidth()
                 )
                 Spacer(modifier = Modifier.height(8.dp))
@@ -190,7 +195,7 @@ fun AdminPanelScreen(viewModel: WorkViewModel) {
                         newEmployee = ""
                     }
                 }) {
-                    Text("Add Employee")
+                    Text("Add Associate")
                 }
                 Spacer(modifier = Modifier.height(12.dp))
 
@@ -203,7 +208,7 @@ fun AdminPanelScreen(viewModel: WorkViewModel) {
             }
         }
 
-        // --- 4. WORK IDS (ACTIVE / IN-ACTIVE) ---
+        // --- 4. WORK IDS ---
         ElevatedCard(modifier = Modifier.fillMaxWidth()) {
             Column(modifier = Modifier.padding(16.dp)) {
                 Text("Work IDs (Active / In-Active)", fontWeight = FontWeight.SemiBold)
@@ -234,7 +239,7 @@ fun AdminPanelScreen(viewModel: WorkViewModel) {
             }
         }
 
-        // --- 5. ACTIVITIES (ACTIVE / IN-ACTIVE + AUTO PROPER CASE) ---
+        // --- 5. ACTIVITIES (AUTO PROPER CASE) ---
         ElevatedCard(modifier = Modifier.fillMaxWidth()) {
             Column(modifier = Modifier.padding(16.dp)) {
                 Text("Activities (Auto Proper Case)", fontWeight = FontWeight.SemiBold)
