@@ -15,13 +15,14 @@ import kotlinx.coroutines.withTimeoutOrNull
 import java.text.SimpleDateFormat
 import java.util.Calendar
 import java.util.Locale
+import java.util.UUID
 
 class WorkViewModel : ViewModel() {
 
     private val db = FirebaseFirestore.getInstance()
     private val recordsCollection = db.collection("work_records")
     private val masterDoc = db.collection("app_config").document("master_data")
-    private val remindersDoc = db.collection("app_config").document("reminders")
+    private val alertsDoc = db.collection("app_config").document("alerts")
 
     private val _currentUserRole = MutableStateFlow(UserRole.NONE)
     val currentUserRole: StateFlow<UserRole> = _currentUserRole.asStateFlow()
@@ -63,6 +64,10 @@ class WorkViewModel : ViewModel() {
         tamilNaduPincodeList.map { MasterItem(it.pincode, true) }
     )
 
+    // Active Scrolling Broadcast Reminders synced across devices
+    private val _broadcastReminders = MutableStateFlow<List<BroadcastReminder>>(emptyList())
+    val broadcastReminders: StateFlow<List<BroadcastReminder>> = _broadcastReminders.asStateFlow()
+
     val visitCounts: List<String> = listOf("1", "2", "3", "4", "5+")
     val pastDates: List<String> = generateDatesList()
 
@@ -71,10 +76,6 @@ class WorkViewModel : ViewModel() {
     val syncPercentage = MutableStateFlow("0%")
     val syncStatusMessage = MutableStateFlow("")
     val syncHasError = MutableStateFlow(false)
-
-    // Scrolling Reminder States (Admin Dashboard & Associate Data Entry)
-    val adminScrollingReminder = MutableStateFlow("")
-    val associateRemindersMap = MutableStateFlow>(emptyMap())
 
     private val _records = MutableStateFlow<List<WorkRecord>>(emptyList())
     val records: StateFlow<List<WorkRecord>> = _records.asStateFlow()
@@ -99,61 +100,77 @@ class WorkViewModel : ViewModel() {
     init {
         listenToMasterData()
         listenToWorkRecords()
-        listenToReminders()
+        listenToBroadcastReminders()
     }
 
-    // --- REMINDER ACTIONS (CLOUD SYNCED) ---
-    private fun listenToReminders() {
-        remindersDoc.addSnapshotListener { snapshot, _ ->
-            if (snapshot == null || !snapshot.exists()) return@addSnapshotListener
-            adminScrollingReminder.value = snapshot.getString("adminReminder") ?: ""
-            val rawMap = snapshot.get("associateReminders") as? Map<*, *>
-            if (rawMap != null) {
-                val parsed = mutableMapOf<String, String>()
-                rawMap.forEach { (k, v) ->
-                    if (k is String && v is String) parsed[k] = v
-                }
-                associateRemindersMap.value = parsed
-            }
+    // --- CLOUD BROADCAST REMINDERS FOR SCROLLING MARQUEE TICKER ---
+    private fun listenToBroadcastReminders() {
+        alertsDoc.addSnapshotListener { snapshot, error ->
+            if (error != null || snapshot == null || !snapshot.exists()) return@addSnapshotListener
+            val rawList = snapshot.get("items") as? List<*> ?: return@addSnapshotListener
+            val parsed = rawList.mapNotNull { entry ->
+                val map = entry as? Map<*, *> ?: return@mapNotNull null
+                val id = map["id"] as? String ?: UUID.randomUUID().toString()
+                val target = map["targetAssociate"] as? String ?: "ALL"
+                val msg = map["message"] as? String ?: ""
+                val by = map["createdBy"] as? String ?: "Admin"
+                val ts = (map["timestamp"] as? Number)?.toLong() ?: System.currentTimeMillis()
+                if (msg.isNotBlank()) BroadcastReminder(id, target, msg, by, ts) else null
+            }.sortedByDescending { it.timestamp }
+            _broadcastReminders.value = parsed
         }
     }
 
-    fun setAdminReminder(message: String) {
-        val clean = message.trim()
-        adminScrollingReminder.value = clean
-        remindersDoc.set(hashMapOf("adminReminder" to clean), SetOptions.merge())
+    fun addBroadcastReminder(targetAssociate: String, message: String) {
+        val cleanedMsg = message.trim()
+        if (cleanedMsg.isBlank()) return
+        val newReminder = BroadcastReminder(
+            id = UUID.randomUUID().toString(),
+            targetAssociate = if (targetAssociate.equals("ALL", ignoreCase = true)) "ALL" else normalizeAssociateName(targetAssociate),
+            message = cleanedMsg,
+            createdBy = _loggedInEmployee.value.ifEmpty { "Admin" },
+            timestamp = System.currentTimeMillis()
+        )
+        val updatedList = listOf(newReminder) + _broadcastReminders.value
+        _broadcastReminders.value = updatedList
+        saveRemindersToCloud(updatedList)
     }
 
-    fun clearAdminReminder() {
-        adminScrollingReminder.value = ""
-        remindersDoc.set(hashMapOf("adminReminder" to ""), SetOptions.merge())
+    fun deleteBroadcastReminder(reminderId: String) {
+        val updatedList = _broadcastReminders.value.filterNot { it.id == reminderId }
+        _broadcastReminders.value = updatedList
+        saveRemindersToCloud(updatedList)
     }
 
-    fun setAssociateReminder(associateName: String, message: String) {
-        val key = normalizeAssociateName(associateName).lowercase(Locale.ENGLISH)
-        val clean = message.trim()
-        val updated = associateRemindersMap.value.toMutableMap()
-        if (clean.isEmpty()) updated.remove(key) else updated[key] = clean
-        associateRemindersMap.value = updated
-        remindersDoc.set(hashMapOf("associateReminders" to updated), SetOptions.merge())
+    private fun saveRemindersToCloud(list: List<BroadcastReminder>) {
+        val payload = hashMapOf(
+            "items" to list.map {
+                mapOf(
+                    "id" to it.id,
+                    "targetAssociate" to it.targetAssociate,
+                    "message" to it.message,
+                    "createdBy" to it.createdBy,
+                    "timestamp" to it.timestamp
+                )
+            }
+        )
+        alertsDoc.set(payload, SetOptions.merge())
     }
 
-    fun broadcastReminderToAllAssociates(message: String) {
-        val clean = message.trim()
-        val updated = associateRemindersMap.value.toMutableMap()
-        updated["all"] = clean
-        associateRemindersMap.value = updated
-        remindersDoc.set(hashMapOf("associateReminders" to updated), SetOptions.merge())
+    // Allows tapping a missed date in AI Summary (dd-MM-yy) to pre-fill the Data Entry screen date
+    fun selectMissedDateForEntry(ddMmYy: String) {
+        try {
+            val inFmt = SimpleDateFormat("dd-MM-yy", Locale.ENGLISH)
+            val outFmt = SimpleDateFormat("dd-MMM-yy", Locale.ENGLISH)
+            val parsed = inFmt.parse(ddMmYy.trim())
+            if (parsed != null) {
+                val targetDateStr = outFmt.format(parsed)
+                updateForm { copy(date = targetDateStr) }
+            }
+        } catch (_: Exception) {
+        }
     }
 
-    fun getReminderForAssociate(associateName: String): String {
-        val key = normalizeAssociateName(associateName).lowercase(Locale.ENGLISH)
-        val personal = associateRemindersMap.value[key].orEmpty()
-        val global = associateRemindersMap.value["all"].orEmpty()
-        return listOf(personal, global).filter { it.isNotBlank() }.joinToString("   •   ")
-    }
-
-    // --- PROPER CASE & STANDARDIZATION HELPERS ---
     fun formatProperCase(input: String): String {
         val cleaned = input.trim().replace(Regex("\\s+"), " ")
         if (cleaned.isEmpty()) return ""
@@ -173,12 +190,17 @@ class WorkViewModel : ViewModel() {
         }
     }
 
-    fun normalizeAssociateName(raw: String): String = formatProperCase(raw)
+    fun normalizeAssociateName(raw: String): String {
+        return formatProperCase(raw)
+    }
 
-    fun normalizeCustomerName(raw: String): String = formatProperCase(raw)
+    fun normalizeCustomerName(raw: String): String {
+        return formatProperCase(raw)
+    }
 
     fun lookupPincodeDetails(pin: String): Pair<String, String>? {
-        return tamilNaduPincodeMap[pin.trim()]
+        val cleaned = pin.trim()
+        return tamilNaduPincodeMap[cleaned]
     }
 
     private fun parseCloudList(rawList: List<*>?, type: String): List<MasterItem>? {
@@ -193,7 +215,9 @@ class WorkViewModel : ViewModel() {
                     name = item["name"] as? String ?: ""
                     active = item["isActive"] as? Boolean ?: (item["active"] as? Boolean ?: true)
                 }
-                is String -> name = item
+                is String -> {
+                    name = item
+                }
             }
             val normalizedName = when (type) {
                 "activity" -> normalizeActivityName(name)
@@ -216,10 +240,15 @@ class WorkViewModel : ViewModel() {
             }
             if (snapshot == null || !snapshot.exists()) return@addSnapshotListener
 
-            parseCloudList(snapshot.get("employees") as? List<*>, "employee")?.let { masterEmployees.value = it }
-            parseCloudList(snapshot.get("workIds") as? List<*>, "workId")?.let { masterWorkIds.value = it }
-            parseCloudList(snapshot.get("activities") as? List<*>, "activity")?.let { masterActivities.value = it }
-            parseCloudList(snapshot.get("pincodes") as? List<*>, "pincode")?.let { masterPincodes.value = it }
+            val cloudEmp = parseCloudList(snapshot.get("employees") as? List<*>, type = "employee")
+            val cloudWork = parseCloudList(snapshot.get("workIds") as? List<*>, type = "workId")
+            val cloudAct = parseCloudList(snapshot.get("activities") as? List<*>, type = "activity")
+            val cloudPins = parseCloudList(snapshot.get("pincodes") as? List<*>, type = "pincode")
+
+            cloudEmp?.let { masterEmployees.value = it }
+            cloudWork?.let { masterWorkIds.value = it }
+            cloudAct?.let { masterActivities.value = it }
+            cloudPins?.let { masterPincodes.value = it }
         }
     }
 
@@ -259,8 +288,12 @@ class WorkViewModel : ViewModel() {
                     mergedActivities[key] = existing.copy(isActive = existing.isActive || item.isActive)
                 }
             }
-            if (!mergedActivities.containsKey("valuation")) mergedActivities["valuation"] = MasterItem("Valuation", true)
-            if (!mergedActivities.containsKey("stability")) mergedActivities["stability"] = MasterItem("Stability", true)
+            if (!mergedActivities.containsKey("valuation")) {
+                mergedActivities["valuation"] = MasterItem("Valuation", true)
+            }
+            if (!mergedActivities.containsKey("stability")) {
+                mergedActivities["stability"] = MasterItem("Stability", true)
+            }
             masterActivities.value = mergedActivities.values.toList()
 
             val mergedEmployees = linkedMapOf<String, MasterItem>()
@@ -278,7 +311,7 @@ class WorkViewModel : ViewModel() {
 
             syncProgress.value = 0.60f
             syncPercentage.value = "60%"
-            syncStatusMessage.value = "Standardizing historical records in Cloud..."
+            syncStatusMessage.value = "Standardizing historical records (Customers, Associates, Activities)..."
 
             recordsCollection.get()
                 .addOnSuccessListener { querySnapshot ->
@@ -302,10 +335,14 @@ class WorkViewModel : ViewModel() {
                             updatedCount++
                         }
                     }
-                    if (updatedCount > 0) batch.commit()
+                    if (updatedCount > 0) {
+                        batch.commit()
+                    }
                     syncMasterDataToCloud()
                 }
-                .addOnFailureListener { syncMasterDataToCloud() }
+                .addOnFailureListener {
+                    syncMasterDataToCloud()
+                }
         }
     }
 
@@ -343,6 +380,8 @@ class WorkViewModel : ViewModel() {
             masterEmployees.value = masterEmployees.value + MasterItem(properEmp, true)
             syncStatusMessage.value = "Added '$properEmp'. Click 'Sync to All Devices'."
             syncHasError.value = false
+        } else if (properEmp.isNotBlank()) {
+            syncStatusMessage.value = "'$properEmp' already exists."
         }
     }
 
@@ -361,6 +400,8 @@ class WorkViewModel : ViewModel() {
             masterActivities.value = masterActivities.value + MasterItem(properName, true)
             syncStatusMessage.value = "Added '$properName'. Click 'Sync to All Devices'."
             syncHasError.value = false
+        } else if (properName.isNotBlank()) {
+            syncStatusMessage.value = "'$properName' already exists in the list."
         }
     }
 
@@ -436,7 +477,9 @@ class WorkViewModel : ViewModel() {
                         finished = true
                     }
 
-                while (!finished) delay(100)
+                while (!finished) {
+                    delay(100)
+                }
                 true
             }
 
@@ -594,7 +637,11 @@ class WorkViewModel : ViewModel() {
     }
 
     val visibleRecords = combine(slicerFilteredRecords, selectedCalendarDate) { recs, calDate ->
-        if (calDate == null) recs else recs.filter { it.date.equals(calDate, ignoreCase = true) }
+        if (calDate == null) {
+            recs
+        } else {
+            recs.filter { it.date.equals(calDate, ignoreCase = true) }
+        }
     }
 }
 
