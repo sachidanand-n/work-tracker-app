@@ -122,7 +122,6 @@ fun DashboardScreen(viewModel: WorkViewModel) {
         }.reversed()
     }
 
-    // Distinct associate counts per date for calendar superscripts
     val associateCountByDate: Map<String, Int> = remember(slicerRecords) {
         slicerRecords.groupBy { it.date }
             .mapValues { (_, list) ->
@@ -130,7 +129,6 @@ fun DashboardScreen(viewModel: WorkViewModel) {
             }
     }
 
-    // Duplicate detection per date for calendar cell background highlighting
     val duplicateStatusByDate: Map<String, DuplicateHighlightStatus> = remember(slicerRecords) {
         slicerRecords.groupBy { it.date }
             .mapValues { (_, list) ->
@@ -144,7 +142,6 @@ fun DashboardScreen(viewModel: WorkViewModel) {
             }
     }
 
-    // Alphabetical associate breakdown when a calendar date is selected
     val dailyAssociateRows: List<AssociateDailyRow> = remember(selectedCalDate, visibleRecords, masterEmps, role, loggedInEmp, selectedEmp) {
         if (selectedCalDate == null) {
             emptyList()
@@ -183,7 +180,7 @@ fun DashboardScreen(viewModel: WorkViewModel) {
             .padding(16.dp),
         verticalArrangement = Arrangement.spacedBy(14.dp)
     ) {
-        // --- HEADER WITH "AI SUMMARY" BUTTON AT TOP RIGHT ---
+        // Header with AI Summary button
         item {
             Row(
                 modifier = Modifier.fillMaxWidth(),
@@ -321,4 +318,95 @@ fun DashboardScreen(viewModel: WorkViewModel) {
                         Column(modifier = Modifier.weight(1f)) {
                             Text(
                                 text = "Total Amount",
-                                style = MaterialTheme.typography.label
+                                style = MaterialTheme.typography.labelSmall,
+                                color = MaterialTheme.colorScheme.onSecondaryContainer.copy(alpha = 0.8f)
+                            )
+                            Text(
+                                text = "₹%.0f".format(totalBilled),
+                                style = MaterialTheme.typography.titleLarge,
+                                fontWeight = FontWeight.ExtraBold,
+                                color = MaterialTheme.colorScheme.onSecondaryContainer
+                            )
+                        }
+
+                        Column(
+                            modifier = Modifier.weight(1f),
+                            horizontalAlignment = Alignment.CenterHorizontally
+                        ) {
+                            Text(
+                                text = "Pending Amount",
+                                style = MaterialTheme.typography.labelSmall,
+                                color = MaterialTheme.colorScheme.onSecondaryContainer.copy(alpha = 0.8f)
+                            )
+                            Text(
+                                text = "₹%.0f".format(totalPending),
+                                style = MaterialTheme.typography.titleLarge,
+                                fontWeight = FontWeight.ExtraBold,
+                                color = MaterialTheme.colorScheme.error
+                            )
+                        }
+
+                        Column(
+                            modifier = Modifier.weight(0.85f),
+                            horizontalAlignment = Alignment.End
+                        ) {
+                            Text(
+                                text = "% Pending",
+                                style = MaterialTheme.typography.labelSmall,
+                                color = MaterialTheme.colorScheme.onSecondaryContainer.copy(alpha = 0.8f)
+                            )
+                            Text(
+                                text = "%.1f%%".format(pendingPercentage),
+                                style = MaterialTheme.typography.titleLarge,
+                                fontWeight = FontWeight.ExtraBold,
+                                color = if (pendingPercentage > 50.0) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.primary
+                            )
+                        }
+                    }
+                }
+            }
+        }
+
+        // Clustered Column + Line Combo Chart
+        item {
+            ElevatedCard(modifier = Modifier.fillMaxWidth()) {
+                Column(modifier = Modifier.padding(16.dp)) {
+                    Text(
+                        text = "Monthly Collection vs Pending (%)",
+                        style = MaterialTheme.typography.titleMedium,
+                        fontWeight = FontWeight.Bold
+                    )
+                    Spacer(modifier = Modifier.height(6.dp))
+
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.spacedBy(14.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        LegendIndicator(color = Color(0xFF81C784), label = "Collected", isLine = false)
+                        LegendIndicator(color = Color(0xFFE57373), label = "Pending", isLine = false)
+                        LegendIndicator(color = Color.Black, label = "% Pending", isLine = true)
+                    }
+
+                    Spacer(modifier = Modifier.height(16.dp))
+
+                    if (monthlyMetrics.isEmpty()) {
+                        Text(
+                            text = "No collection records available to plot",
+                            style = MaterialTheme.typography.bodyMedium,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    } else {
+                        ClusteredCollectionComboChart(data = monthlyMetrics)
+                    }
+                }
+            }
+        }
+
+        // Dynamic Calendar with Duplicate Highlighting
+        item {
+            DynamicAttendanceCalendar(
+                associateCountByDate = associateCountByDate,
+                duplicateStatusByDate = duplicateStatusByDate,
+                selectedDate = selectedCalDate,
+                onDateClick = { dateStr -> viewModel.toggleCalendarDate(dateStr) },
