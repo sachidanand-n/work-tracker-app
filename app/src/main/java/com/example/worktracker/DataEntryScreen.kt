@@ -14,6 +14,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.input.KeyboardCapitalization
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
 
@@ -30,18 +31,20 @@ fun DataEntryScreen(
     val allEmployees by viewModel.masterEmployees.collectAsState()
     val allWorkIds by viewModel.masterWorkIds.collectAsState()
     val allActivities by viewModel.masterActivities.collectAsState()
+    val allPincodes by viewModel.masterPincodes.collectAsState()
 
     val activeEmployees = remember(allEmployees) { allEmployees.filter { it.isActive }.map { it.name } }
     val activeWorkIds = remember(allWorkIds) { allWorkIds.filter { it.isActive }.map { it.name } }
     val activeActivities = remember(allActivities) { allActivities.filter { it.isActive }.map { it.name } }
-
-    val pincodeOptions = remember { tamilNaduPincodeList.map { it.pincode } }
+    val activePincodeOptions = remember(allPincodes) {
+        val activeList = allPincodes.filter { it.isActive }.map { it.name }
+        activeList.ifEmpty { tamilNaduPincodeList.map { it.pincode } }
+    }
 
     val isPhoneValid = form.phoneNumber.length == 10 && form.phoneNumber.all { char -> char.isDigit() }
     var submitError by remember { mutableStateOf(false) }
     var showAiSummaryDialog by remember { mutableStateOf(false) }
 
-    // Determine the associate whose summary should be shown
     val targetAssociate = remember(userRole, loggedInEmp, form.employeeName, activeEmployees) {
         if (userRole == UserRole.USER) {
             loggedInEmp
@@ -57,7 +60,7 @@ fun DataEntryScreen(
             .padding(16.dp),
         verticalArrangement = Arrangement.spacedBy(12.dp)
     ) {
-        // --- HEADER WITH "AI SUMMARY" IN TOP RIGHT CORNER ---
+        // Header with AI Summary in Top Right Corner
         Row(
             modifier = Modifier.fillMaxWidth(),
             horizontalArrangement = Arrangement.SpaceBetween,
@@ -128,10 +131,17 @@ fun DataEntryScreen(
             onOptionSelected = { selected -> viewModel.updateForm { copy(activity = selected) } }
         )
 
+        // Customer Name enforced in Proper Case
         OutlinedTextField(
             value = form.customerName,
             onValueChange = { input -> viewModel.updateForm { copy(customerName = input) } },
-            label = { Text("Customer Name *") },
+            label = { Text("Customer Name (Proper Case) *") },
+            keyboardOptions = KeyboardOptions(capitalization = KeyboardCapitalization.Words),
+            supportingText = {
+                if (form.customerName.isNotBlank()) {
+                    Text("Will be saved as: ${viewModel.formatProperCase(form.customerName)}")
+                }
+            },
             modifier = Modifier.fillMaxWidth()
         )
 
@@ -144,8 +154,8 @@ fun DataEntryScreen(
 
         AppDropdown(
             label = "Pincode (Select to auto-retrieve Place & District) *",
-            options = pincodeOptions,
-            selectedOption = form.pincode,
+            options = activePincodeOptions,
+            selectedOption = form.pincode.ifEmpty { activePincodeOptions.firstOrNull() ?: "" },
             onOptionSelected = { selectedPin -> viewModel.onPincodeSelected(selectedPin) }
         )
 
@@ -244,7 +254,6 @@ fun DataEntryScreen(
         }
     }
 
-    // --- ASSOCIATE PERSONAL AI SUMMARY DIALOG ---
     if (showAiSummaryDialog) {
         val personalRecords = remember(allRecords, targetAssociate) {
             allRecords.filter { it.employeeName.equals(targetAssociate, ignoreCase = true) }
