@@ -11,8 +11,11 @@ import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.KeyboardArrowLeft
+import androidx.compose.material.icons.automirrored.filled.KeyboardArrowRight
 import androidx.compose.material.icons.filled.Call
 import androidx.compose.material.icons.filled.Clear
 import androidx.compose.material.icons.filled.EventBusy
@@ -27,6 +30,11 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.geometry.CornerRadius
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Size
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.Path
+import androidx.compose.ui.graphics.StrokeCap
+import androidx.compose.ui.graphics.StrokeJoin
+import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
@@ -36,6 +44,14 @@ import java.util.Calendar
 import java.util.Date
 import java.util.Locale
 
+data class MonthlyFinancialMetrics(
+    val monthYear: String,
+    val totalAmount: Double,
+    val collectedAmount: Double,
+    val pendingAmount: Double,
+    val pendingPercentage: Double
+)
+
 sealed class AssociateDailyRow {
     data class Entered(val record: WorkRecord) : AssociateDailyRow()
     data class NotEntered(val associateName: String) : AssociateDailyRow()
@@ -43,6 +59,7 @@ sealed class AssociateDailyRow {
 
 @Composable
 fun DashboardScreen(viewModel: WorkViewModel) {
+    val allRecords by viewModel.records.collectAsState()
     val slicerRecords by viewModel.slicerFilteredRecords.collectAsState(initial = emptyList())
     val visibleRecords by viewModel.visibleRecords.collectAsState(initial = emptyList())
     val selectedCalDate by viewModel.selectedCalendarDate.collectAsState()
@@ -51,6 +68,7 @@ fun DashboardScreen(viewModel: WorkViewModel) {
     val role by viewModel.currentUserRole.collectAsState()
     val loggedInEmp by viewModel.loggedInEmployee.collectAsState()
 
+    val selectedMonth by viewModel.selectedMonthFilter.collectAsState()
     val selectedDistrict by viewModel.selectedDistrictFilter.collectAsState()
     val selectedAct by viewModel.selectedActivityFilter.collectAsState()
     val selectedWorkId by viewModel.selectedWorkIdFilter.collectAsState()
@@ -60,24 +78,44 @@ fun DashboardScreen(viewModel: WorkViewModel) {
     val masterWorks by viewModel.masterWorkIds.collectAsState()
     val masterEmps by viewModel.masterEmployees.collectAsState()
 
+    // Month Slicer Options dynamically built from records + current month
+    val monthOptions = remember(allRecords) {
+        val currentMonthStr = SimpleDateFormat("MMM-yy", Locale.ENGLISH).format(Calendar.getInstance().time)
+        val distinctMonths = (listOf(currentMonthStr) + allRecords.map { extractMonthYear(it.date) })
+            .filter { it.isNotBlank() }
+            .distinct()
+        listOf("All") + distinctMonths
+    }
+
     val districtOptions = remember {
         listOf("All") + tamilNaduPincodeList.map { it.district }.distinct().sorted()
     }
 
-    val totalPending: Double = visibleRecords.sumOf { it.pendingAmount }
-    val totalAdvance: Double = visibleRecords.sumOf { it.advanceAmount }
+    // Score Card Totals (Total Amount, Pending Amount, % of Pending Amount)
     val totalBilled: Double = visibleRecords.sumOf { it.totalAmount }
+    val totalPending: Double = visibleRecords.sumOf { it.pendingAmount }
+    val pendingPercentage: Double = if (totalBilled > 0.0) (totalPending / totalBilled) * 100.0 else 0.0
 
-    val monthlyAdvances: List<MonthlyAdvance> = remember(slicerRecords) {
+    // Graph Data: Collected (Light Green), Pending (Light Red), % Pending (Black Line + Dots)
+    val monthlyMetrics: List<MonthlyFinancialMetrics> = remember(slicerRecords) {
         slicerRecords.groupBy { record: WorkRecord ->
-            val parts = record.date.split("-")
-            if (parts.size == 3) "${parts[1]}-${parts[2]}" else record.date
+            extractMonthYear(record.date)
         }.map { (month: String, recList: List<WorkRecord>) ->
-            MonthlyAdvance(month, recList.sumOf { it.advanceAmount })
-        }
+            val billed = recList.sumOf { it.totalAmount }
+            val collected = recList.sumOf { it.advanceAmount }
+            val pending = recList.sumOf { it.pendingAmount }
+            val pct = if (billed > 0.0) (pending / billed) * 100.0 else 0.0
+            MonthlyFinancialMetrics(
+                monthYear = month,
+                totalAmount = billed,
+                collectedAmount = collected,
+                pendingAmount = pending,
+                pendingPercentage = pct
+            )
+        }.reversed() // Chronological left-to-right order
     }
 
-    // Count distinct associates per date ("dd-MMM-yy") for calendar superscripts
+    // Distinct associate counts per date for calendar superscripts
     val associateCountByDate: Map<String, Int> = remember(slicerRecords) {
         slicerRecords.groupBy { it.date }
             .mapValues { (_, list) ->
@@ -85,7 +123,7 @@ fun DashboardScreen(viewModel: WorkViewModel) {
             }
     }
 
-    // Build alphabetical associate rows when a specific calendar date is selected
+    // Alphabetical associate breakdown when a calendar date is selected
     val dailyAssociateRows: List<AssociateDailyRow> = remember(selectedCalDate, visibleRecords, masterEmps, role, loggedInEmp, selectedEmp) {
         if (selectedCalDate == null) {
             emptyList()
@@ -151,7 +189,7 @@ fun DashboardScreen(viewModel: WorkViewModel) {
             )
         }
 
-        // Slicer Filters
+        // Slicer Filters (including Month Slicer)
         item {
             Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
                 Row(
@@ -173,6 +211,13 @@ fun DashboardScreen(viewModel: WorkViewModel) {
                         .horizontalScroll(rememberScrollState()),
                     horizontalArrangement = Arrangement.spacedBy(8.dp)
                 ) {
+                    DropdownFilterChip(
+                        label = "Month",
+                        currentValue = selectedMonth,
+                        options = monthOptions,
+                        onSelect = { viewModel.selectedMonthFilter.value = it }
+                    )
+
                     if (role == UserRole.ADMIN) {
                         DropdownFilterChip(
                             label = "Employee",
@@ -206,77 +251,121 @@ fun DashboardScreen(viewModel: WorkViewModel) {
             }
         }
 
-        // Receivable Summary Card
+        // --- 3-PART FINANCIAL SCORE CARD (Total Amount, Pending Amount, % of Pending Amount) ---
         item {
             Card(
                 modifier = Modifier.fillMaxWidth(),
-                colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.errorContainer)
+                colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.secondaryContainer)
             ) {
                 Column(modifier = Modifier.padding(16.dp)) {
                     Text(
-                        text = if (selectedCalDate != null) "PENDING RECEIVABLE ($selectedCalDate)" else "TOTAL PENDING RECEIVABLE",
+                        text = if (selectedCalDate != null) "FINANCIAL SUMMARY ($selectedCalDate)" else "FINANCIAL SUMMARY",
                         style = MaterialTheme.typography.labelMedium,
                         fontWeight = FontWeight.Bold,
-                        color = MaterialTheme.colorScheme.onErrorContainer
+                        color = MaterialTheme.colorScheme.onSecondaryContainer
                     )
-                    Text(
-                        text = "₹ %.2f".format(totalPending),
-                        style = MaterialTheme.typography.headlineLarge,
-                        fontWeight = FontWeight.ExtraBold,
-                        color = MaterialTheme.colorScheme.error
-                    )
-                    Spacer(modifier = Modifier.height(6.dp))
+                    Spacer(modifier = Modifier.height(10.dp))
+
                     Row(
                         modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.SpaceBetween
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
                     ) {
-                        Text(
-                            text = "Total Billed: ₹%.0f".format(totalBilled),
-                            style = MaterialTheme.typography.bodySmall,
-                            color = MaterialTheme.colorScheme.onErrorContainer
-                        )
-                        Text(
-                            text = "Collected: ₹%.0f".format(totalAdvance),
-                            style = MaterialTheme.typography.bodySmall,
-                            color = MaterialTheme.colorScheme.onErrorContainer
-                        )
+                        // 1. Total Amount
+                        Column(modifier = Modifier.weight(1f)) {
+                            Text(
+                                text = "Total Amount",
+                                style = MaterialTheme.typography.labelSmall,
+                                color = MaterialTheme.colorScheme.onSecondaryContainer.copy(alpha = 0.8f)
+                            )
+                            Text(
+                                text = "₹%.0f".format(totalBilled),
+                                style = MaterialTheme.typography.titleLarge,
+                                fontWeight = FontWeight.ExtraBold,
+                                color = MaterialTheme.colorScheme.onSecondaryContainer
+                            )
+                        }
+
+                        // 2. Pending Amount
+                        Column(
+                            modifier = Modifier.weight(1f),
+                            horizontalAlignment = Alignment.CenterHorizontally
+                        ) {
+                            Text(
+                                text = "Pending Amount",
+                                style = MaterialTheme.typography.labelSmall,
+                                color = MaterialTheme.colorScheme.onSecondaryContainer.copy(alpha = 0.8f)
+                            )
+                            Text(
+                                text = "₹%.0f".format(totalPending),
+                                style = MaterialTheme.typography.titleLarge,
+                                fontWeight = FontWeight.ExtraBold,
+                                color = MaterialTheme.colorScheme.error
+                            )
+                        }
+
+                        // 3. % of Pending Amount
+                        Column(
+                            modifier = Modifier.weight(0.85f),
+                            horizontalAlignment = Alignment.End
+                        ) {
+                            Text(
+                                text = "% Pending",
+                                style = MaterialTheme.typography.labelSmall,
+                                color = MaterialTheme.colorScheme.onSecondaryContainer.copy(alpha = 0.8f)
+                            )
+                            Text(
+                                text = "%.1f%%".format(pendingPercentage),
+                                style = MaterialTheme.typography.titleLarge,
+                                fontWeight = FontWeight.ExtraBold,
+                                color = if (pendingPercentage > 50.0) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.primary
+                            )
+                        }
                     }
                 }
             }
         }
 
-        // Monthly Advance Graph
+        // --- CLUSTERED COLUMN + LINE COMBO CHART ---
         item {
             ElevatedCard(modifier = Modifier.fillMaxWidth()) {
                 Column(modifier = Modifier.padding(16.dp)) {
                     Text(
-                        text = "Monthly Advance Collection",
+                        text = "Monthly Collection vs Pending (%)",
                         style = MaterialTheme.typography.titleMedium,
                         fontWeight = FontWeight.Bold
                     )
-                    Text(
-                        text = "Aggregated advance payments grouped by month",
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant
-                    )
+                    Spacer(modifier = Modifier.height(6.dp))
+
+                    // Chart Legend
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.spacedBy(14.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        LegendIndicator(color = Color(0xFF81C784), label = "Collected", isLine = false)
+                        LegendIndicator(color = Color(0xFFE57373), label = "Pending", isLine = false)
+                        LegendIndicator(color = Color.Black, label = "% Pending", isLine = true)
+                    }
+
                     Spacer(modifier = Modifier.height(16.dp))
 
-                    if (monthlyAdvances.isEmpty()) {
+                    if (monthlyMetrics.isEmpty()) {
                         Text(
                             text = "No collection records available to plot",
                             style = MaterialTheme.typography.bodyMedium,
                             color = MaterialTheme.colorScheme.onSurfaceVariant
                         )
                     } else {
-                        MonthlyAdvanceBarChart(data = monthlyAdvances)
+                        ClusteredCollectionComboChart(data = monthlyMetrics)
                     }
                 }
             }
         }
 
-        // --- CURRENT MONTH ATTENDANCE CALENDAR ---
+        // --- DYNAMIC CALENDAR WITH FORWARD & BACKWARD BUTTONS ---
         item {
-            CurrentMonthAttendanceCalendar(
+            DynamicAttendanceCalendar(
                 associateCountByDate = associateCountByDate,
                 selectedDate = selectedCalDate,
                 onDateClick = { dateStr -> viewModel.toggleCalendarDate(dateStr) },
@@ -284,7 +373,7 @@ fun DashboardScreen(viewModel: WorkViewModel) {
             )
         }
 
-        // Records Header
+        // Records Section Header
         item {
             Row(
                 modifier = Modifier.fillMaxWidth(),
@@ -309,7 +398,7 @@ fun DashboardScreen(viewModel: WorkViewModel) {
             }
         }
 
-        // Records List (Alphabetical Associate Breakdown if a day is clicked, otherwise standard list)
+        // Records List
         if (selectedCalDate != null) {
             items(
                 items = dailyAssociateRows,
@@ -341,18 +430,173 @@ fun DashboardScreen(viewModel: WorkViewModel) {
 }
 
 @Composable
-fun CurrentMonthAttendanceCalendar(
+fun LegendIndicator(color: Color, label: String, isLine: Boolean) {
+    Row(verticalAlignment = Alignment.CenterVertically) {
+        if (isLine) {
+            Box(
+                modifier = Modifier
+                    .width(16.dp)
+                    .height(2.dp)
+                    .background(color),
+                contentAlignment = Alignment.Center
+            ) {
+                Box(
+                    modifier = Modifier
+                        .size(6.dp)
+                        .background(color, CircleShape)
+                )
+            }
+        } else {
+            Box(
+                modifier = Modifier
+                    .size(10.dp)
+                    .background(color, RoundedCornerShape(2.dp))
+            )
+        }
+        Spacer(modifier = Modifier.width(4.dp))
+        Text(
+            text = label,
+            style = MaterialTheme.typography.labelSmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant
+        )
+    }
+}
+
+@Composable
+fun ClusteredCollectionComboChart(data: List<MonthlyFinancialMetrics>) {
+    val maxAmount = (data.maxOfOrNull { maxOf(it.collectedAmount, it.pendingAmount) } ?: 1.0).coerceAtLeast(1.0)
+    val lightGreen = Color(0xFF81C784)
+    val lightRed = Color(0xFFE57373)
+    val lineColor = Color.Black
+
+    Column(modifier = Modifier.fillMaxWidth()) {
+        Canvas(
+            modifier = Modifier
+                .fillMaxWidth()
+                .height(175.dp)
+        ) {
+            val canvasWidth = size.width
+            val canvasHeight = size.height
+            val slotCount = data.size
+            val slotWidth = canvasWidth / slotCount
+            val barWidth = (slotWidth * 0.30f).coerceAtMost(28.dp.toPx())
+            val gapBetweenBars = 3.dp.toPx()
+            val topPadding = 16.dp.toPx()
+            val drawableHeight = canvasHeight - topPadding
+
+            val linePoints = mutableListOf<Offset>()
+
+            data.forEachIndexed { index, item ->
+                val slotCenter = (index * slotWidth) + (slotWidth / 2f)
+
+                // 1. Collected Column (Light Green - Left of Center)
+                val collectedHeight = ((item.collectedAmount / maxAmount) * drawableHeight).toFloat()
+                val collectedLeft = slotCenter - barWidth - (gapBetweenBars / 2f)
+                drawRoundRect(
+                    color = lightGreen,
+                    topLeft = Offset(collectedLeft, canvasHeight - collectedHeight),
+                    size = Size(barWidth, collectedHeight),
+                    cornerRadius = CornerRadius(4.dp.toPx(), 4.dp.toPx())
+                )
+
+                // 2. Pending Column (Light Red - Right of Center)
+                val pendingHeight = ((item.pendingAmount / maxAmount) * drawableHeight).toFloat()
+                val pendingLeft = slotCenter + (gapBetweenBars / 2f)
+                drawRoundRect(
+                    color = lightRed,
+                    topLeft = Offset(pendingLeft, canvasHeight - pendingHeight),
+                    size = Size(barWidth, pendingHeight),
+                    cornerRadius = CornerRadius(4.dp.toPx(), 4.dp.toPx())
+                )
+
+                // 3. % Pending Coordinate (0% to 100% scale mapped to drawableHeight)
+                val clampedPct = item.pendingPercentage.coerceIn(0.0, 100.0)
+                val pointY = canvasHeight - ((clampedPct / 100.0) * drawableHeight).toFloat()
+                linePoints.add(Offset(slotCenter, pointY))
+            }
+
+            // Draw Black Connecting Line for % Pending
+            if (linePoints.size > 1) {
+                val path = Path().apply {
+                    moveTo(linePoints.first().x, linePoints.first().y)
+                    for (i in 1 until linePoints.size) {
+                        lineTo(linePoints[i].x, linePoints[i].y)
+                    }
+                }
+                drawPath(
+                    path = path,
+                    color = lineColor,
+                    style = Stroke(
+                        width = 2.dp.toPx(),
+                        cap = StrokeCap.Round,
+                        join = StrokeJoin.Round
+                    )
+                )
+            }
+
+            // Draw Filled Dot Markers on every data point
+            linePoints.forEach { pt ->
+                drawCircle(
+                    color = lineColor,
+                    radius = 4.5.dp.toPx(),
+                    center = pt
+                )
+            }
+        }
+
+        Spacer(modifier = Modifier.height(6.dp))
+
+        // X-Axis Labels & Values per Month
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.SpaceBetween
+        ) {
+            data.forEach { item ->
+                Column(
+                    modifier = Modifier.weight(1f),
+                    horizontalAlignment = Alignment.CenterHorizontally
+                ) {
+                    Text(
+                        text = item.monthYear,
+                        style = MaterialTheme.typography.labelSmall,
+                        fontWeight = FontWeight.Bold,
+                        color = MaterialTheme.colorScheme.onSurface
+                    )
+                    Text(
+                        text = "%.0f%% pend".format(item.pendingPercentage),
+                        style = MaterialTheme.typography.labelSmall,
+                        color = Color.Black,
+                        fontWeight = FontWeight.SemiBold
+                    )
+                    Text(
+                        text = "₹%.0f / ₹%.0f".format(item.collectedAmount, item.pendingAmount),
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
+            }
+        }
+    }
+}
+
+@Composable
+fun DynamicAttendanceCalendar(
     associateCountByDate: Map<String, Int>,
     selectedDate: String?,
     onDateClick: (String) -> Unit,
     onClearDate: () -> Unit
 ) {
-    val calendarData = remember {
+    // Track month offset from current month (0 = current month, -1 = previous month, +1 = next month)
+    var monthOffset by remember { mutableIntStateOf(0) }
+
+    val calendarData = remember(monthOffset) {
         val cal = Calendar.getInstance()
+        cal.set(Calendar.DAY_OF_MONTH, 1)
+        cal.add(Calendar.MONTH, monthOffset)
+
         val monthTitle = SimpleDateFormat("MMMM yyyy", Locale.ENGLISH).format(cal.time)
         val dateFormatter = SimpleDateFormat("dd-MMM-yy", Locale.ENGLISH)
 
-        cal.set(Calendar.DAY_OF_MONTH, 1)
         val firstDayOfWeekOffset = cal.get(Calendar.DAY_OF_WEEK) - 1 // 0 = Sun, 6 = Sat
         val daysInMonth = cal.getActualMaximum(Calendar.DAY_OF_MONTH)
 
@@ -373,32 +617,48 @@ fun CurrentMonthAttendanceCalendar(
 
     ElevatedCard(modifier = Modifier.fillMaxWidth()) {
         Column(modifier = Modifier.padding(16.dp)) {
+            // Month Header with Backward (<) and Forward (>) Buttons
             Row(
                 modifier = Modifier.fillMaxWidth(),
                 horizontalArrangement = Arrangement.SpaceBetween,
                 verticalAlignment = Alignment.CenterVertically
             ) {
-                Column {
+                IconButton(onClick = { monthOffset -= 1 }) {
+                    Icon(
+                        imageVector = Icons.AutoMirrored.Filled.KeyboardArrowLeft,
+                        contentDescription = "Previous Month"
+                    )
+                }
+
+                Column(horizontalAlignment = Alignment.CenterHorizontally) {
                     Text(
                         text = monthTitle,
                         style = MaterialTheme.typography.titleMedium,
                         fontWeight = FontWeight.Bold
                     )
                     Text(
-                        text = "Superscript = active associates entered • Tap a day to inspect",
-                        style = MaterialTheme.typography.bodySmall,
+                        text = "Superscript = active associates entered",
+                        style = MaterialTheme.typography.labelSmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant
                     )
                 }
 
-                if (selectedDate != null) {
-                    IconButton(onClick = onClearDate) {
-                        Icon(Icons.Default.Clear, contentDescription = "Clear Date")
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    IconButton(onClick = { monthOffset += 1 }) {
+                        Icon(
+                            imageVector = Icons.AutoMirrored.Filled.KeyboardArrowRight,
+                            contentDescription = "Next Month"
+                        )
+                    }
+                    if (selectedDate != null) {
+                        IconButton(onClick = onClearDate) {
+                            Icon(Icons.Default.Clear, contentDescription = "Clear Date")
+                        }
                     }
                 }
             }
 
-            Spacer(modifier = Modifier.height(12.dp))
+            Spacer(modifier = Modifier.height(8.dp))
 
             // Weekday Header Row
             Row(modifier = Modifier.fillMaxWidth()) {
@@ -675,65 +935,6 @@ fun DropdownFilterChip(
                         expanded = false
                     }
                 )
-            }
-        }
-    }
-}
-
-@Composable
-fun MonthlyAdvanceBarChart(data: List<MonthlyAdvance>) {
-    val maxVal = (data.maxOfOrNull { it.totalAdvance } ?: 1.0).coerceAtLeast(1.0)
-    val primaryColor = MaterialTheme.colorScheme.primary
-
-    Column(modifier = Modifier.fillMaxWidth()) {
-        Canvas(
-            modifier = Modifier
-                .fillMaxWidth()
-                .height(150.dp)
-        ) {
-            val canvasWidth = size.width
-            val canvasHeight = size.height
-            val barCount = data.size
-            val slotWidth = canvasWidth / barCount
-            val barWidth = slotWidth * 0.5f
-
-            data.forEachIndexed { index: Int, item: MonthlyAdvance ->
-                val barHeight = ((item.totalAdvance / maxVal) * (canvasHeight * 0.85f)).toFloat()
-                val left = (index * slotWidth) + ((slotWidth - barWidth) / 2f)
-                val top = canvasHeight - barHeight
-
-                drawRoundRect(
-                    color = primaryColor,
-                    topLeft = Offset(left, top),
-                    size = Size(barWidth, barHeight),
-                    cornerRadius = CornerRadius(6.dp.toPx(), 6.dp.toPx())
-                )
-            }
-        }
-
-        Spacer(modifier = Modifier.height(6.dp))
-
-        Row(
-            modifier = Modifier.fillMaxWidth(),
-            horizontalArrangement = Arrangement.SpaceBetween
-        ) {
-            data.forEach { item: MonthlyAdvance ->
-                Column(
-                    modifier = Modifier.weight(1f),
-                    horizontalAlignment = Alignment.CenterHorizontally
-                ) {
-                    Text(
-                        text = "₹%.0f".format(item.totalAdvance),
-                        style = MaterialTheme.typography.labelSmall,
-                        fontWeight = FontWeight.Bold,
-                        color = MaterialTheme.colorScheme.primary
-                    )
-                    Text(
-                        text = item.monthYear,
-                        style = MaterialTheme.typography.labelSmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant
-                    )
-                }
             }
         }
     }
