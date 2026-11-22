@@ -3,9 +3,12 @@ package com.example.worktracker
 import android.content.Intent
 import android.graphics.Paint
 import android.net.Uri
+import android.widget.Toast
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.Canvas
+import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
+import androidx.compose.foundation.basicMarquee
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.*
@@ -20,9 +23,13 @@ import androidx.compose.material.icons.automirrored.filled.KeyboardArrowLeft
 import androidx.compose.material.icons.automirrored.filled.KeyboardArrowRight
 import androidx.compose.material.icons.filled.AutoAwesome
 import androidx.compose.material.icons.filled.Call
+import androidx.compose.material.icons.filled.Campaign
 import androidx.compose.material.icons.filled.Clear
+import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.EventBusy
+import androidx.compose.material.icons.filled.PushPin
 import androidx.compose.material.icons.filled.Search
+import androidx.compose.material.icons.filled.Send
 import androidx.compose.material.icons.filled.Warning
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
@@ -45,6 +52,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import java.net.URLEncoder
 import java.text.SimpleDateFormat
 import java.util.Calendar
 import java.util.Date
@@ -64,17 +72,28 @@ data class MonthlyFinancialMetrics(
     val pendingPercentage: Double
 )
 
+data class AiInsightsReport(
+    val bullets: List<String>,
+    val recommendedReminderText: String,
+    val topPendingRecord: WorkRecord?,
+    val topPendingAmount: Double,
+    val missedDatesDdMmYy: List<String>
+)
+
 sealed class AssociateDailyRow {
     data class Entered(val record: WorkRecord) : AssociateDailyRow()
     data class NotEntered(val associateName: String) : AssociateDailyRow()
 }
 
+@OptIn(ExperimentalFoundationApi::class)
 @Composable
 fun DashboardScreen(viewModel: WorkViewModel) {
+    val context = LocalContext.current
     val allRecords by viewModel.records.collectAsState()
     val slicerRecords by viewModel.slicerFilteredRecords.collectAsState(initial = emptyList())
     val visibleRecords by viewModel.visibleRecords.collectAsState(initial = emptyList())
     val selectedCalDate by viewModel.selectedCalendarDate.collectAsState()
+    val adminReminder by viewModel.adminScrollingReminder.collectAsState()
 
     val search by viewModel.searchQuery.collectAsState()
     val role by viewModel.currentUserRole.collectAsState()
@@ -146,8 +165,6 @@ fun DashboardScreen(viewModel: WorkViewModel) {
             }
     }
 
-    // Duplicate notifications formatted as:
-    // Duplicate Entry detected on dd-mm-yy by Associate Name 1, Associate Name 2, Associate Name 3
     val duplicateAnnouncements: List<String> = remember(visibleRecords) {
         visibleRecords.groupBy { it.date }
             .mapNotNull { (dateStr, recsOnDate) ->
@@ -241,6 +258,53 @@ fun DashboardScreen(viewModel: WorkViewModel) {
                         style = MaterialTheme.typography.labelMedium,
                         fontWeight = FontWeight.Bold
                     )
+                }
+            }
+        }
+
+        // --- SCROLLING ACTION REMINDER TICKER FOR ADMIN DASHBOARD ---
+        if (adminReminder.isNotBlank()) {
+            item {
+                Surface(
+                    modifier = Modifier.fillMaxWidth(),
+                    color = Color(0xFFE3F2FD),
+                    shape = RoundedCornerShape(8.dp),
+                    border = BorderStroke(1.dp, MaterialTheme.colorScheme.primary)
+                ) {
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(horizontal = 10.dp, vertical = 6.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Icon(
+                            imageVector = Icons.Default.Campaign,
+                            contentDescription = "Admin Reminder",
+                            tint = MaterialTheme.colorScheme.primary,
+                            modifier = Modifier.size(18.dp)
+                        )
+                        Spacer(modifier = Modifier.width(8.dp))
+                        Text(
+                            text = adminReminder,
+                            style = MaterialTheme.typography.bodySmall,
+                            fontWeight = FontWeight.Bold,
+                            color = MaterialTheme.colorScheme.onSurface,
+                            maxLines = 1,
+                            modifier = Modifier
+                                .weight(1f)
+                                .basicMarquee(iterations = Int.MAX_VALUE)
+                        )
+                        IconButton(
+                            onClick = { viewModel.clearAdminReminder() },
+                            modifier = Modifier.size(24.dp)
+                        ) {
+                            Icon(
+                                imageVector = Icons.Default.Close,
+                                contentDescription = "Clear Reminder",
+                                modifier = Modifier.size(14.dp)
+                            )
+                        }
+                    }
                 }
             }
         }
@@ -463,7 +527,7 @@ fun DashboardScreen(viewModel: WorkViewModel) {
             }
         }
 
-        // Duplicate Entry Alert Banner in Records Field
+        // Duplicate Entry Alert Banner
         if (duplicateAnnouncements.isNotEmpty()) {
             item {
                 Card(
@@ -527,7 +591,7 @@ fun DashboardScreen(viewModel: WorkViewModel) {
         }
     }
 
-    // AI Summary Dialog
+    // --- ACTIONABLE AI SUMMARY DIALOG ---
     if (showAiSummaryDialog) {
         val activeFilters = mutableListOf<String>()
         if (selectedMonth != "All") activeFilters.add("Month: $selectedMonth")
@@ -538,8 +602,8 @@ fun DashboardScreen(viewModel: WorkViewModel) {
         if (selectedCalDate != null) activeFilters.add("Date: $selectedCalDate")
         val scopeLabel = if (activeFilters.isEmpty()) "All Records" else activeFilters.joinToString(" | ")
 
-        val insights = remember(visibleRecords, scopeLabel) {
-            generateAiSummaryInsights(
+        val insightsData = remember(visibleRecords, scopeLabel) {
+            analyzeAiInsightsData(
                 records = visibleRecords,
                 scopeDescription = scopeLabel
             )
@@ -548,17 +612,77 @@ fun DashboardScreen(viewModel: WorkViewModel) {
         AlertDialog(
             onDismissRequest = { showAiSummaryDialog = false },
             icon = { Icon(Icons.Default.AutoAwesome, contentDescription = null, tint = MaterialTheme.colorScheme.primary) },
-            title = { Text("AI Summary Insights", fontWeight = FontWeight.Bold) },
+            title = { Text("AI Action Summary", fontWeight = FontWeight.Bold) },
             text = {
                 Column(
                     modifier = Modifier.verticalScroll(rememberScrollState()),
                     verticalArrangement = Arrangement.spacedBy(10.dp)
                 ) {
-                    insights.forEach { bullet ->
-                        Text(
-                            text = "• $bullet",
-                            style = MaterialTheme.typography.bodyMedium
-                        )
+                    insightsData.bullets.forEach { bullet ->
+                        Text(text = "• $bullet", style = MaterialTheme.typography.bodyMedium)
+                    }
+
+                    Divider(modifier = Modifier.padding(vertical = 4.dp))
+                    Text(
+                        text = "Convert Insights to Actions",
+                        style = MaterialTheme.typography.labelLarge,
+                        fontWeight = FontWeight.Bold,
+                        color = MaterialTheme.colorScheme.primary
+                    )
+
+                    // Action 1: Pin to Dashboard Scrolling Bar
+                    OutlinedButton(
+                        onClick = {
+                            viewModel.setAdminReminder(insightsData.recommendedReminderText)
+                            Toast.makeText(context, "Pinned to Dashboard scrolling banner!", Toast.LENGTH_SHORT).show()
+                            showAiSummaryDialog = false
+                        },
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        Icon(Icons.Default.PushPin, contentDescription = null, modifier = Modifier.size(16.dp))
+                        Spacer(modifier = Modifier.width(6.dp))
+                        Text("Pin Reminder to Dashboard")
+                    }
+
+                    // Action 2: Broadcast Reminder to Associate(s) Data Entry Screen
+                    if (role == UserRole.ADMIN) {
+                        OutlinedButton(
+                            onClick = {
+                                if (selectedEmp != "All") {
+                                    viewModel.setAssociateReminder(selectedEmp, insightsData.recommendedReminderText)
+                                    Toast.makeText(context, "Sent scrolling reminder to $selectedEmp!", Toast.LENGTH_SHORT).show()
+                                } else {
+                                    viewModel.broadcastReminderToAllAssociates(insightsData.recommendedReminderText)
+                                    Toast.makeText(context, "Broadcast scrolling reminder to all associates!", Toast.LENGTH_SHORT).show()
+                                }
+                                showAiSummaryDialog = false
+                            },
+                            modifier = Modifier.fillMaxWidth()
+                        ) {
+                            Icon(Icons.Default.Campaign, contentDescription = null, modifier = Modifier.size(16.dp))
+                            Spacer(modifier = Modifier.width(6.dp))
+                            Text(if (selectedEmp != "All") "Send Reminder to $selectedEmp" else "Broadcast Reminder to All Users")
+                        }
+                    }
+
+                    // Action 3: One-Tap WhatsApp Follow-Up for Highest Pending Customer
+                    if (insightsData.topPendingRecord != null && insightsData.topPendingAmount > 0.0) {
+                        val rec = insightsData.topPendingRecord
+                        OutlinedButton(
+                            onClick = {
+                                val msg = "Hello ${rec.customerName}, gentle reminder regarding pending balance of ₹%.0f for ${rec.activity} (Work ID: ${rec.workId}, Date: ${rec.date}).".format(
+                                    insightsData.topPendingAmount
+                                )
+                                val encoded = URLEncoder.encode(msg, "UTF-8")
+                                val waUri = Uri.parse("https://wa.me/91${rec.phoneNumber}?text=$encoded")
+                                context.startActivity(Intent(Intent.ACTION_VIEW, waUri))
+                            },
+                            modifier = Modifier.fillMaxWidth()
+                        ) {
+                            Icon(Icons.Default.Send, contentDescription = null, modifier = Modifier.size(16.dp))
+                            Spacer(modifier = Modifier.width(6.dp))
+                            Text("WhatsApp Follow-Up (${rec.customerName})")
+                        }
                     }
                 }
             },
@@ -571,38 +695,40 @@ fun DashboardScreen(viewModel: WorkViewModel) {
     }
 }
 
-// Shared AI Summary Engine used on both Dashboard and DataEntryScreen
-fun generateAiSummaryInsights(
+fun analyzeAiInsightsData(
     records: List<WorkRecord>,
     scopeDescription: String
-): List<String> {
-    val insights = mutableListOf<String>()
-    insights.add("Scope: $scopeDescription (${records.size} entries)")
+): AiInsightsReport {
+    val bullets = mutableListOf<String>()
+    bullets.add("Scope: $scopeDescription (${records.size} entries)")
 
     if (records.isEmpty()) {
-        insights.add("No work entries found for this selection.")
-        return insights
+        bullets.add("No work entries found for this selection.")
+        return AiInsightsReport(
+            bullets = bullets,
+            recommendedReminderText = "Reminder ($scopeDescription): No entries logged yet.",
+            topPendingRecord = null,
+            topPendingAmount = 0.0,
+            missedDatesDdMmYy = emptyList()
+        )
     }
 
-    // 1. Financial Overview
     val totalBilled = records.sumOf { it.totalAmount }
     val totalCollected = records.sumOf { it.advanceAmount }
     val totalPending = records.sumOf { it.pendingAmount }
     val pendingRate = if (totalBilled > 0) (totalPending / totalBilled) * 100.0 else 0.0
-    insights.add(
+    bullets.add(
         "Financials: ₹%.0f billed | ₹%.0f collected | ₹%.0f pending (%.1f%%).".format(
             totalBilled, totalCollected, totalPending, pendingRate
         )
     )
 
-    // 2. Number of Customers Visited
     val distinctCustomers = records
         .map { it.customerName.trim() }
         .filter { it.isNotBlank() }
         .distinctBy { it.lowercase(Locale.ENGLISH) }
-    insights.add("Customers Visited: ${distinctCustomers.size} unique customer(s) visited.")
+    bullets.add("Customers Visited: ${distinctCustomers.size} unique customer(s) visited.")
 
-    // 3. Repeated Visits w.r.t Customer
     val customerVisits = records
         .filter { it.customerName.isNotBlank() }
         .groupBy { it.customerName.trim().lowercase(Locale.ENGLISH) }
@@ -617,39 +743,59 @@ fun generateAiSummaryInsights(
 
     if (customerVisits.isNotEmpty()) {
         val repeatSummary = customerVisits.take(5).joinToString(", ") { "${it.first} (${it.second} visits)" }
-        insights.add("Repeated Customer Visits: $repeatSummary")
+        bullets.add("Repeated Customer Visits: $repeatSummary")
     } else {
-        insights.add("Repeated Customer Visits: None (all customers visited once).")
+        bullets.add("Repeated Customer Visits: None (all customers visited once).")
     }
 
-    // 4. Most Pending Amount from a Customer
-    val topPendingCustomer = records
+    val groupedByCustomerPending = records
         .filter { it.customerName.isNotBlank() }
         .groupBy { it.customerName.trim().lowercase(Locale.ENGLISH) }
         .mapValues { (_, list) ->
-            Pair(list.first().customerName.trim(), list.sumOf { it.pendingAmount })
+            val totalCustPending = list.sumOf { it.pendingAmount }
+            val latestRec = list.maxByOrNull { it.timestamp }!!
+            Pair(latestRec, totalCustPending)
         }
         .values
         .maxByOrNull { it.second }
 
-    if (topPendingCustomer != null && topPendingCustomer.second > 0.0) {
-        insights.add("Highest Pending Customer: ${topPendingCustomer.first} (₹%.0f pending).".format(topPendingCustomer.second))
+    val topPendingRecord = groupedByCustomerPending?.first
+    val topPendingAmount = groupedByCustomerPending?.second ?: 0.0
+
+    if (topPendingRecord != null && topPendingAmount > 0.0) {
+        bullets.add("Highest Pending Customer: ${topPendingRecord.customerName} (₹%.0f pending).".format(topPendingAmount))
     } else {
-        insights.add("Highest Pending Customer: None (₹0 pending).")
+        bullets.add("Highest Pending Customer: None (₹0 pending).")
     }
 
-    // 5. Data Not Entered Dates (Exclude Sundays) formatted as dd-mm-yy
     val missingDates = findMissedNonSundayDates(records)
     if (missingDates.isNotEmpty()) {
-        insights.add("Data Not Entered Dates (Excl. Sundays): ${missingDates.joinToString(", ")}")
+        bullets.add("Data Not Entered Dates (Excl. Sundays): ${missingDates.joinToString(", ")}")
     } else {
-        insights.add("Data Not Entered Dates (Excl. Sundays): None — 100% working days logged!")
+        bullets.add("Data Not Entered Dates (Excl. Sundays): None — 100% working days logged!")
     }
 
-    return insights
+    // Build concise action ticker text
+    val reminderParts = mutableListOf<String>()
+    if (missingDates.isNotEmpty()) {
+        reminderParts.add("Missing Logs: ${missingDates.take(5).joinToString(", ")}")
+    }
+    if (topPendingRecord != null && topPendingAmount > 0.0) {
+        reminderParts.add("Follow-up Due: ${topPendingRecord.customerName} (₹%.0f pending)".format(topPendingAmount))
+    }
+    if (reminderParts.isEmpty()) {
+        reminderParts.add("All working days logged • ₹%.0f total pending across ${records.size} entries".format(totalPending))
+    }
+
+    return AiInsightsReport(
+        bullets = bullets,
+        recommendedReminderText = reminderParts.joinToString("   •   "),
+        topPendingRecord = topPendingRecord,
+        topPendingAmount = topPendingAmount,
+        missedDatesDdMmYy = missingDates
+    )
 }
 
-// Finds missing working dates (excluding Sundays) from the earliest entry in the month up to today
 private fun findMissedNonSundayDates(records: List<WorkRecord>): List<String> {
     val parser = SimpleDateFormat("dd-MMM-yy", Locale.ENGLISH)
     val outputFormatter = SimpleDateFormat("dd-MM-yy", Locale.ENGLISH)
@@ -671,7 +817,6 @@ private fun findMissedNonSundayDates(records: List<WorkRecord>): List<String> {
         calStart.set(Calendar.DAY_OF_MONTH, 1)
     }
 
-    // Strip time component for clean day iteration
     calStart.set(Calendar.HOUR_OF_DAY, 0)
     calStart.set(Calendar.MINUTE, 0)
     calStart.set(Calendar.SECOND, 0)
@@ -793,7 +938,6 @@ fun ClusteredCollectionComboChart(data: List<MonthlyFinancialMetrics>) {
             data.forEachIndexed { index, item ->
                 val slotCenter = (index * slotWidth) + (slotWidth / 2f)
 
-                // 1. Collected Bar (Light Green) + Data Label
                 val collectedHeight = ((item.collectedAmount / maxAmount) * drawableHeight).toFloat()
                 val collectedLeft = slotCenter - barWidth - (gapBetweenBars / 2f)
                 val collectedTop = canvasHeight - collectedHeight
@@ -810,7 +954,6 @@ fun ClusteredCollectionComboChart(data: List<MonthlyFinancialMetrics>) {
                     colTextPaint
                 )
 
-                // 2. Pending Bar (Light Red) + Data Label
                 val pendingHeight = ((item.pendingAmount / maxAmount) * drawableHeight).toFloat()
                 val pendingLeft = slotCenter + (gapBetweenBars / 2f)
                 val pendingTop = canvasHeight - pendingHeight
@@ -827,7 +970,6 @@ fun ClusteredCollectionComboChart(data: List<MonthlyFinancialMetrics>) {
                     colTextPaint
                 )
 
-                // 3. % Pending Line Point
                 val clampedPct = item.pendingPercentage.coerceIn(0.0, 100.0)
                 val pointY = canvasHeight - ((clampedPct / 100.0) * drawableHeight).toFloat()
                 linePoints.add(Offset(slotCenter, pointY) to item.pendingPercentage)
@@ -851,7 +993,6 @@ fun ClusteredCollectionComboChart(data: List<MonthlyFinancialMetrics>) {
                 )
             }
 
-            // 4. Filled Dot Markers + Line Data Labels (% Pending)
             linePoints.forEach { (pt, pctValue) ->
                 drawCircle(
                     color = lineColor,
@@ -943,321 +1084,4 @@ fun DynamicAttendanceCalendar(
                     )
                 }
 
-                Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                    Text(
-                        text = monthTitle,
-                        style = MaterialTheme.typography.titleMedium,
-                        fontWeight = FontWeight.Bold
-                    )
-                    Text(
-                        text = "Top-right badge = active associates entered",
-                        style = MaterialTheme.typography.labelSmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant
-                    )
-                }
-
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    IconButton(onClick = { monthOffset += 1 }) {
-                        Icon(
-                            imageVector = Icons.AutoMirrored.Filled.KeyboardArrowRight,
-                            contentDescription = "Next Month"
-                        )
-                    }
-                    if (selectedDate != null) {
-                        IconButton(onClick = onClearDate) {
-                            Icon(Icons.Default.Clear, contentDescription = "Clear Date")
-                        }
-                    }
-                }
-            }
-
-            Spacer(modifier = Modifier.height(8.dp))
-
-            Row(modifier = Modifier.fillMaxWidth()) {
-                dayHeaders.forEach { dayName ->
-                    Text(
-                        text = dayName,
-                        modifier = Modifier.weight(1f),
-                        textAlign = TextAlign.Center,
-                        style = MaterialTheme.typography.labelSmall,
-                        fontWeight = FontWeight.Bold,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant
-                    )
-                }
-            }
-
-            Spacer(modifier = Modifier.height(6.dp))
-
-            Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
-                weeks.forEach { week ->
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.spacedBy(4.dp)
-                    ) {
-                        week.forEach { cell ->
-                            if (cell == null) {
-                                Box(modifier = Modifier.weight(1f).height(44.dp))
-                            } else {
-                                val (dayNumber, dateStr) = cell
-                                val count = associateCountByDate[dateStr] ?: 0
-                                val dupStatus = duplicateStatusByDate[dateStr] ?: DuplicateHighlightStatus.NONE
-                                val isSelected = selectedDate == dateStr
-                                val isToday = todayFormatted == dateStr
-
-                                val containerColor = when {
-                                    isSelected -> MaterialTheme.colorScheme.primary
-                                    dupStatus == DuplicateHighlightStatus.MULTIPLE_ASSOCIATES_DUPLICATE -> lightPink
-                                    dupStatus == DuplicateHighlightStatus.SINGLE_ASSOCIATE_DUPLICATE -> lightYellow
-                                    count > 0 -> MaterialTheme.colorScheme.secondaryContainer
-                                    else -> MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.4f)
-                                }
-
-                                val textColor = when {
-                                    isSelected -> MaterialTheme.colorScheme.onPrimary
-                                    dupStatus != DuplicateHighlightStatus.NONE -> Color.Black
-                                    count > 0 -> MaterialTheme.colorScheme.onSecondaryContainer
-                                    else -> MaterialTheme.colorScheme.onSurfaceVariant
-                                }
-
-                                Surface(
-                                    modifier = Modifier
-                                        .weight(1f)
-                                        .height(44.dp)
-                                        .clip(RoundedCornerShape(8.dp))
-                                        .clickable { onDateClick(dateStr) },
-                                    color = containerColor,
-                                    shape = RoundedCornerShape(8.dp),
-                                    border = if (isToday && !isSelected) {
-                                        BorderStroke(1.5.dp, MaterialTheme.colorScheme.primary)
-                                    } else null
-                                ) {
-                                    // Date centered/bottom-left, Associate count pinned far away in TOP-RIGHT corner
-                                    Box(
-                                        modifier = Modifier
-                                            .fillMaxSize()
-                                            .padding(horizontal = 4.dp, vertical = 2.dp)
-                                    ) {
-                                        Text(
-                                            text = dayNumber.toString(),
-                                            style = MaterialTheme.typography.bodyMedium,
-                                            fontWeight = if (count > 0 || isSelected) FontWeight.Bold else FontWeight.Normal,
-                                            color = textColor,
-                                            modifier = Modifier.align(Alignment.Center)
-                                        )
-
-                                        if (count > 0) {
-                                            Text(
-                                                text = count.toString(),
-                                                style = MaterialTheme.typography.labelSmall.copy(fontSize = 9.sp),
-                                                fontWeight = FontWeight.ExtraBold,
-                                                color = if (isSelected) MaterialTheme.colorScheme.onPrimary else MaterialTheme.colorScheme.primary,
-                                                modifier = Modifier.align(Alignment.TopEnd)
-                                            )
-                                        }
-                                    }
-                                }
-                            }
-                        }
-                    }
-                }
-            }
-
-            Spacer(modifier = Modifier.height(10.dp))
-
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.spacedBy(12.dp),
-                verticalAlignment = Alignment.CenterVertically
-            ) {
-                LegendIndicator(color = lightYellow, label = "Same Assoc. Duplicate", isLine = false)
-                LegendIndicator(color = lightPink, label = "Multi-Assoc. Duplicate", isLine = false)
-            }
-        }
-    }
-}
-
-@Composable
-fun NotEnteredAssociateCard(associateName: String, date: String) {
-    Card(
-        modifier = Modifier.fillMaxWidth(),
-        colors = CardDefaults.cardColors(
-            containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.65f)
-        ),
-        border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant)
-    ) {
-        Row(
-            modifier = Modifier
-                .fillMaxWidth()
-                .padding(horizontal = 14.dp, vertical = 12.dp),
-            horizontalArrangement = Arrangement.SpaceBetween,
-            verticalAlignment = Alignment.CenterVertically
-        ) {
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                Icon(
-                    imageVector = Icons.Default.EventBusy,
-                    contentDescription = null,
-                    tint = MaterialTheme.colorScheme.error,
-                    modifier = Modifier.size(20.dp)
-                )
-                Spacer(modifier = Modifier.width(10.dp))
-                Column {
-                    Text(
-                        text = associateName,
-                        style = MaterialTheme.typography.titleSmall,
-                        fontWeight = FontWeight.Bold,
-                        color = MaterialTheme.colorScheme.onSurface
-                    )
-                    Text(
-                        text = "Date: $date",
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant
-                    )
-                }
-            }
-
-            Box(
-                modifier = Modifier
-                    .background(
-                        color = MaterialTheme.colorScheme.errorContainer,
-                        shape = RoundedCornerShape(6.dp)
-                    )
-                    .padding(horizontal = 10.dp, vertical = 4.dp)
-            ) {
-                Text(
-                    text = "Not Entered",
-                    style = MaterialTheme.typography.labelMedium,
-                    fontWeight = FontWeight.Bold,
-                    color = MaterialTheme.colorScheme.error
-                )
-            }
-        }
-    }
-}
-
-@Composable
-fun RecordItemCard(record: WorkRecord, showEmployee: Boolean) {
-    val context = LocalContext.current
-    val timeFormatter = remember { SimpleDateFormat("hh:mm a", Locale.getDefault()) }
-    val formattedTime = remember(record.timestamp) { timeFormatter.format(Date(record.timestamp)) }
-
-    Card(
-        modifier = Modifier.fillMaxWidth(),
-        elevation = CardDefaults.cardElevation(defaultElevation = 2.dp)
-    ) {
-        Column(modifier = Modifier.padding(14.dp)) {
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.SpaceBetween,
-                verticalAlignment = Alignment.CenterVertically
-            ) {
-                Text(
-                    text = "${record.workId} • ${record.date}",
-                    style = MaterialTheme.typography.labelLarge,
-                    color = MaterialTheme.colorScheme.primary,
-                    fontWeight = FontWeight.Bold
-                )
-
-                Text(
-                    text = formattedTime,
-                    style = MaterialTheme.typography.labelSmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    fontWeight = FontWeight.Medium
-                )
-            }
-
-            Spacer(modifier = Modifier.height(4.dp))
-
-            if (showEmployee) {
-                Text(
-                    text = "Associate: ${record.employeeName}",
-                    style = MaterialTheme.typography.labelMedium,
-                    color = MaterialTheme.colorScheme.tertiary,
-                    fontWeight = FontWeight.Bold
-                )
-            }
-
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.SpaceBetween,
-                verticalAlignment = Alignment.CenterVertically
-            ) {
-                Text(
-                    text = record.customerName,
-                    style = MaterialTheme.typography.titleMedium,
-                    fontWeight = FontWeight.SemiBold
-                )
-                AssistChip(
-                    onClick = {},
-                    label = { Text("Visits: ${record.visitCount}", style = MaterialTheme.typography.labelSmall) }
-                )
-            }
-
-            Text(
-                text = "${record.activity} | ${record.place}, ${record.district} (${record.pincode})",
-                style = MaterialTheme.typography.bodyMedium,
-                color = MaterialTheme.colorScheme.onSurfaceVariant
-            )
-
-            Divider(modifier = Modifier.padding(vertical = 8.dp))
-
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.SpaceBetween,
-                verticalAlignment = Alignment.CenterVertically
-            ) {
-                Column {
-                    Text(
-                        text = "Total: ₹${record.totalAmount}  |  Adv: ₹${record.advanceAmount}",
-                        style = MaterialTheme.typography.bodySmall
-                    )
-                    Text(
-                        text = "Pending: ₹${record.pendingAmount}",
-                        style = MaterialTheme.typography.bodyMedium,
-                        fontWeight = FontWeight.Bold,
-                        color = if (record.pendingAmount > 0) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.primary
-                    )
-                }
-
-                IconButton(
-                    onClick = {
-                        val intent = Intent(Intent.ACTION_DIAL, Uri.parse("tel:${record.phoneNumber}"))
-                        context.startActivity(intent)
-                    }
-                ) {
-                    Icon(Icons.Default.Call, contentDescription = "Call Customer", tint = MaterialTheme.colorScheme.primary)
-                }
-            }
-        }
-    }
-}
-
-@Composable
-fun DropdownFilterChip(
-    label: String,
-    currentValue: String,
-    options: List<String>,
-    onSelect: (String) -> Unit
-) {
-    var expanded by remember { mutableStateOf(false) }
-
-    Box {
-        FilterChip(
-            selected = currentValue != "All",
-            onClick = { expanded = true },
-            label = {
-                Text(if (currentValue == "All") "$label: All" else "$label: $currentValue")
-            }
-        )
-        DropdownMenu(expanded = expanded, onDismissRequest = { expanded = false }) {
-            options.forEach { opt ->
-                DropdownMenuItem(
-                    text = { Text(opt) },
-                    onClick = {
-                        onSelect(opt)
-                        expanded = false
-                    }
-                )
-            }
-        }
-    }
-}
+                Column(horizontalAlignment
