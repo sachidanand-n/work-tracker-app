@@ -1,6 +1,7 @@
 package com.example.worktracker
 
 import android.content.Intent
+import android.graphics.Paint
 import android.net.Uri
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.Canvas
@@ -22,6 +23,7 @@ import androidx.compose.material.icons.filled.Call
 import androidx.compose.material.icons.filled.Clear
 import androidx.compose.material.icons.filled.EventBusy
 import androidx.compose.material.icons.filled.Search
+import androidx.compose.material.icons.filled.Warning
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.runtime.getValue
@@ -37,10 +39,12 @@ import androidx.compose.ui.graphics.Path
 import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.StrokeJoin
 import androidx.compose.ui.graphics.drawscope.Stroke
+import androidx.compose.ui.graphics.nativeCanvas
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 import java.text.SimpleDateFormat
 import java.util.Calendar
 import java.util.Date
@@ -142,6 +146,26 @@ fun DashboardScreen(viewModel: WorkViewModel) {
             }
     }
 
+    // Duplicate notifications formatted as:
+    // Duplicate Entry detected on dd-mm-yy by Associate Name 1, Associate Name 2, Associate Name 3
+    val duplicateAnnouncements: List<String> = remember(visibleRecords) {
+        visibleRecords.groupBy { it.date }
+            .mapNotNull { (dateStr, recsOnDate) ->
+                val duplicateAssociates = recsOnDate
+                    .groupBy { it.employeeName.trim().lowercase() }
+                    .filter { it.value.size > 1 }
+                    .map { it.value.first().employeeName }
+                    .sorted()
+
+                if (duplicateAssociates.isNotEmpty()) {
+                    val ddMmYy = formatToDdMmYy(dateStr)
+                    "Duplicate Entry detected on $ddMmYy by ${duplicateAssociates.joinToString(", ")}"
+                } else {
+                    null
+                }
+            }
+    }
+
     val dailyAssociateRows: List<AssociateDailyRow> = remember(selectedCalDate, visibleRecords, masterEmps, role, loggedInEmp, selectedEmp) {
         if (selectedCalDate == null) {
             emptyList()
@@ -180,6 +204,7 @@ fun DashboardScreen(viewModel: WorkViewModel) {
             .padding(16.dp),
         verticalArrangement = Arrangement.spacedBy(14.dp)
     ) {
+        // Header with AI Summary button at top right
         item {
             Row(
                 modifier = Modifier.fillMaxWidth(),
@@ -220,6 +245,7 @@ fun DashboardScreen(viewModel: WorkViewModel) {
             }
         }
 
+        // Search Bar
         item {
             OutlinedTextField(
                 value = search,
@@ -231,6 +257,7 @@ fun DashboardScreen(viewModel: WorkViewModel) {
             )
         }
 
+        // Slicer Filters
         item {
             Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
                 Row(
@@ -292,6 +319,7 @@ fun DashboardScreen(viewModel: WorkViewModel) {
             }
         }
 
+        // 3-Part Financial Score Card
         item {
             Card(
                 modifier = Modifier.fillMaxWidth(),
@@ -363,6 +391,7 @@ fun DashboardScreen(viewModel: WorkViewModel) {
             }
         }
 
+        // Clustered Column + Line Combo Chart with Data Labels
         item {
             ElevatedCard(modifier = Modifier.fillMaxWidth()) {
                 Column(modifier = Modifier.padding(16.dp)) {
@@ -398,6 +427,7 @@ fun DashboardScreen(viewModel: WorkViewModel) {
             }
         }
 
+        // Dynamic Calendar with Top-Right Superscript & Duplicate Highlighting
         item {
             DynamicAttendanceCalendar(
                 associateCountByDate = associateCountByDate,
@@ -408,6 +438,7 @@ fun DashboardScreen(viewModel: WorkViewModel) {
             )
         }
 
+        // Records Section Header
         item {
             Row(
                 modifier = Modifier.fillMaxWidth(),
@@ -432,6 +463,41 @@ fun DashboardScreen(viewModel: WorkViewModel) {
             }
         }
 
+        // Duplicate Entry Alert Banner in Records Field
+        if (duplicateAnnouncements.isNotEmpty()) {
+            item {
+                Card(
+                    modifier = Modifier.fillMaxWidth(),
+                    colors = CardDefaults.cardColors(containerColor = Color(0xFFFFF8E1)),
+                    border = BorderStroke(1.dp, Color(0xFFFFB300))
+                ) {
+                    Column(
+                        modifier = Modifier.padding(12.dp),
+                        verticalArrangement = Arrangement.spacedBy(6.dp)
+                    ) {
+                        duplicateAnnouncements.forEach { message ->
+                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                Icon(
+                                    imageVector = Icons.Default.Warning,
+                                    contentDescription = null,
+                                    tint = Color(0xFFE65100),
+                                    modifier = Modifier.size(18.dp)
+                                )
+                                Spacer(modifier = Modifier.width(8.dp))
+                                Text(
+                                    text = message,
+                                    style = MaterialTheme.typography.bodySmall,
+                                    fontWeight = FontWeight.Bold,
+                                    color = Color(0xFF4E342E)
+                                )
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        // Records List
         if (selectedCalDate != null) {
             items(
                 items = dailyAssociateRows,
@@ -461,33 +527,28 @@ fun DashboardScreen(viewModel: WorkViewModel) {
         }
     }
 
+    // AI Summary Dialog
     if (showAiSummaryDialog) {
-        val insights = remember(
-            visibleRecords,
-            selectedMonth,
-            selectedEmp,
-            selectedDistrict,
-            selectedAct,
-            selectedWorkId,
-            selectedCalDate,
-            duplicateStatusByDate
-        ) {
-            generateAiSlicerInsights(
+        val activeFilters = mutableListOf<String>()
+        if (selectedMonth != "All") activeFilters.add("Month: $selectedMonth")
+        if (selectedEmp != "All") activeFilters.add("Employee: $selectedEmp")
+        if (selectedDistrict != "All") activeFilters.add("District: $selectedDistrict")
+        if (selectedAct != "All") activeFilters.add("Activity: $selectedAct")
+        if (selectedWorkId != "All") activeFilters.add("Work ID: $selectedWorkId")
+        if (selectedCalDate != null) activeFilters.add("Date: $selectedCalDate")
+        val scopeLabel = if (activeFilters.isEmpty()) "All Records" else activeFilters.joinToString(" | ")
+
+        val insights = remember(visibleRecords, scopeLabel) {
+            generateAiSummaryInsights(
                 records = visibleRecords,
-                month = selectedMonth,
-                employee = selectedEmp,
-                district = selectedDistrict,
-                activity = selectedAct,
-                workId = selectedWorkId,
-                calendarDate = selectedCalDate,
-                duplicateMap = duplicateStatusByDate
+                scopeDescription = scopeLabel
             )
         }
 
         AlertDialog(
             onDismissRequest = { showAiSummaryDialog = false },
             icon = { Icon(Icons.Default.AutoAwesome, contentDescription = null, tint = MaterialTheme.colorScheme.primary) },
-            title = { Text("AI Slicer Insights", fontWeight = FontWeight.Bold) },
+            title = { Text("AI Summary Insights", fontWeight = FontWeight.Bold) },
             text = {
                 Column(
                     modifier = Modifier.verticalScroll(rememberScrollState()),
@@ -510,83 +571,151 @@ fun DashboardScreen(viewModel: WorkViewModel) {
     }
 }
 
-private fun generateAiSlicerInsights(
+// Shared AI Summary Engine used on both Dashboard and DataEntryScreen
+fun generateAiSummaryInsights(
     records: List<WorkRecord>,
-    month: String,
-    employee: String,
-    district: String,
-    activity: String,
-    workId: String,
-    calendarDate: String?,
-    duplicateMap: Map<String, DuplicateHighlightStatus>
+    scopeDescription: String
 ): List<String> {
-    val activeFilters = mutableListOf<String>()
-    if (month != "All") activeFilters.add("Month: $month")
-    if (employee != "All") activeFilters.add("Employee: $employee")
-    if (district != "All") activeFilters.add("District: $district")
-    if (activity != "All") activeFilters.add("Activity: $activity")
-    if (workId != "All") activeFilters.add("Work ID: $workId")
-    if (calendarDate != null) activeFilters.add("Date: $calendarDate")
-
-    val filterScope = if (activeFilters.isEmpty()) "All Records (No Active Slicers)" else activeFilters.joinToString(" | ")
+    val insights = mutableListOf<String>()
+    insights.add("Scope: $scopeDescription (${records.size} entries)")
 
     if (records.isEmpty()) {
-        return listOf(
-            "Scope: $filterScope",
-            "No work entries match the currently selected slicers. Try resetting filters or selecting another date."
-        )
+        insights.add("No work entries found for this selection.")
+        return insights
     }
 
-    val insights = mutableListOf<String>()
-    insights.add("Active Scope: $filterScope (${records.size} total entries)")
-
+    // 1. Financial Overview
     val totalBilled = records.sumOf { it.totalAmount }
     val totalCollected = records.sumOf { it.advanceAmount }
     val totalPending = records.sumOf { it.pendingAmount }
-    val collectionRate = if (totalBilled > 0) (totalCollected / totalBilled) * 100.0 else 0.0
     val pendingRate = if (totalBilled > 0) (totalPending / totalBilled) * 100.0 else 0.0
+    insights.add(
+        "Financials: ₹%.0f billed | ₹%.0f collected | ₹%.0f pending (%.1f%%).".format(
+            totalBilled, totalCollected, totalPending, pendingRate
+        )
+    )
 
-    val healthStatus = when {
-        pendingRate <= 25.0 -> "Healthy cash flow"
-        pendingRate <= 55.0 -> "Moderate receivable backlog"
-        else -> "High pending receivable alert"
-    }
-    insights.add("Financial Health ($healthStatus): ₹%.0f collected (%.1f%%) vs ₹%.0f pending (%.1f%%) out of ₹%.0f total billed.".format(
-        totalCollected, collectionRate, totalPending, pendingRate, totalBilled
-    ))
+    // 2. Number of Customers Visited
+    val distinctCustomers = records
+        .map { it.customerName.trim() }
+        .filter { it.isNotBlank() }
+        .distinctBy { it.lowercase(Locale.ENGLISH) }
+    insights.add("Customers Visited: ${distinctCustomers.size} unique customer(s) visited.")
 
-    val topAssociate = records.groupingBy { it.employeeName }
-        .eachCount()
-        .maxByOrNull { it.value }
-    if (topAssociate != null) {
-        val topAssocRevenue = records.filter { it.employeeName == topAssociate.key }.sumOf { it.totalAmount }
-        insights.add("Top Contributor: ${topAssociate.key} leads with ${topAssociate.value} entries (₹%.0f billed).".format(topAssocRevenue))
-    }
+    // 3. Repeated Visits w.r.t Customer
+    val customerVisits = records
+        .filter { it.customerName.isNotBlank() }
+        .groupBy { it.customerName.trim().lowercase(Locale.ENGLISH) }
+        .mapValues { (_, list) ->
+            val displayName = list.first().customerName.trim()
+            val totalVisitsForCust = list.sumOf { it.visitCount.replace("+", "").toIntOrNull() ?: 1 }
+            Pair(displayName, maxOf(list.size, totalVisitsForCust))
+        }
+        .filter { it.value.second > 1 }
+        .values
+        .sortedByDescending { it.second }
 
-    val topActivity = records.groupingBy { it.activity }
-        .eachCount()
-        .maxByOrNull { it.value }
-    if (topActivity != null) {
-        insights.add("Primary Activity: '${topActivity.key}' accounts for ${topActivity.value} of ${records.size} entries.")
-    }
-
-    val topDistrict = records.filter { it.district.isNotBlank() }
-        .groupingBy { it.district }
-        .eachCount()
-        .maxByOrNull { it.value }
-    if (topDistrict != null) {
-        insights.add("Busiest District: ${topDistrict.key} (${topDistrict.value} site visits).")
-    }
-
-    val singleDupDays = duplicateMap.count { it.value == DuplicateHighlightStatus.SINGLE_ASSOCIATE_DUPLICATE }
-    val multiDupDays = duplicateMap.count { it.value == DuplicateHighlightStatus.MULTIPLE_ASSOCIATES_DUPLICATE }
-    if (singleDupDays > 0 || multiDupDays > 0) {
-        insights.add("Duplicate Entry Alert: $singleDupDays day(s) with single-associate duplicates (Light Yellow) and $multiDupDays day(s) with multi-associate duplicates (Light Pink).")
+    if (customerVisits.isNotEmpty()) {
+        val repeatSummary = customerVisits.take(5).joinToString(", ") { "${it.first} (${it.second} visits)" }
+        insights.add("Repeated Customer Visits: $repeatSummary")
     } else {
-        insights.add("Data Integrity: Zero duplicate entries detected across the selected period.")
+        insights.add("Repeated Customer Visits: None (all customers visited once).")
+    }
+
+    // 4. Most Pending Amount from a Customer
+    val topPendingCustomer = records
+        .filter { it.customerName.isNotBlank() }
+        .groupBy { it.customerName.trim().lowercase(Locale.ENGLISH) }
+        .mapValues { (_, list) ->
+            Pair(list.first().customerName.trim(), list.sumOf { it.pendingAmount })
+        }
+        .values
+        .maxByOrNull { it.second }
+
+    if (topPendingCustomer != null && topPendingCustomer.second > 0.0) {
+        insights.add("Highest Pending Customer: ${topPendingCustomer.first} (₹%.0f pending).".format(topPendingCustomer.second))
+    } else {
+        insights.add("Highest Pending Customer: None (₹0 pending).")
+    }
+
+    // 5. Data Not Entered Dates (Exclude Sundays) formatted as dd-mm-yy
+    val missingDates = findMissedNonSundayDates(records)
+    if (missingDates.isNotEmpty()) {
+        insights.add("Data Not Entered Dates (Excl. Sundays): ${missingDates.joinToString(", ")}")
+    } else {
+        insights.add("Data Not Entered Dates (Excl. Sundays): None — 100% working days logged!")
     }
 
     return insights
+}
+
+// Finds missing working dates (excluding Sundays) from the earliest entry in the month up to today
+private fun findMissedNonSundayDates(records: List<WorkRecord>): List<String> {
+    val parser = SimpleDateFormat("dd-MMM-yy", Locale.ENGLISH)
+    val outputFormatter = SimpleDateFormat("dd-MM-yy", Locale.ENGLISH)
+
+    val enteredDatesSet = records.map { it.date.trim().lowercase(Locale.ENGLISH) }.toSet()
+
+    val parsedDates = records.mapNotNull {
+        try {
+            parser.parse(it.date.trim())
+        } catch (_: Exception) {
+            null
+        }
+    }
+
+    val calStart = Calendar.getInstance()
+    if (parsedDates.isNotEmpty()) {
+        calStart.time = parsedDates.minOrNull()!!
+    } else {
+        calStart.set(Calendar.DAY_OF_MONTH, 1)
+    }
+
+    // Strip time component for clean day iteration
+    calStart.set(Calendar.HOUR_OF_DAY, 0)
+    calStart.set(Calendar.MINUTE, 0)
+    calStart.set(Calendar.SECOND, 0)
+    calStart.set(Calendar.MILLISECOND, 0)
+
+    val calToday = Calendar.getInstance().apply {
+        set(Calendar.HOUR_OF_DAY, 0)
+        set(Calendar.MINUTE, 0)
+        set(Calendar.SECOND, 0)
+        set(Calendar.MILLISECOND, 0)
+    }
+
+    val missed = mutableListOf<String>()
+    val cursor = calStart.clone() as Calendar
+    while (!cursor.after(calToday)) {
+        val dayOfWeek = cursor.get(Calendar.DAY_OF_WEEK)
+        if (dayOfWeek != Calendar.SUNDAY) {
+            val formattedKey = parser.format(cursor.time).lowercase(Locale.ENGLISH)
+            if (!enteredDatesSet.contains(formattedKey)) {
+                missed.add(outputFormatter.format(cursor.time))
+            }
+        }
+        cursor.add(Calendar.DAY_OF_YEAR, 1)
+    }
+    return missed
+}
+
+private fun formatToDdMmYy(dateStr: String): String {
+    return try {
+        val inFmt = SimpleDateFormat("dd-MMM-yy", Locale.ENGLISH)
+        val outFmt = SimpleDateFormat("dd-MM-yy", Locale.ENGLISH)
+        val parsed = inFmt.parse(dateStr.trim())
+        if (parsed != null) outFmt.format(parsed) else dateStr
+    } catch (_: Exception) {
+        dateStr
+    }
+}
+
+private fun formatCompactAmount(value: Double): String {
+    return if (value >= 1000.0) {
+        "₹%.1fk".format(value / 1000.0).replace(".0k", "k")
+    } else {
+        "₹%.0f".format(value)
+    }
 }
 
 @Composable
@@ -633,7 +762,7 @@ fun ClusteredCollectionComboChart(data: List<MonthlyFinancialMetrics>) {
         Canvas(
             modifier = Modifier
                 .fillMaxWidth()
-                .height(175.dp)
+                .height(205.dp)
         ) {
             val canvasWidth = size.width
             val canvasHeight = size.height
@@ -641,42 +770,74 @@ fun ClusteredCollectionComboChart(data: List<MonthlyFinancialMetrics>) {
             val slotWidth = canvasWidth / slotCount
             val barWidth = (slotWidth * 0.30f).coerceAtMost(28.dp.toPx())
             val gapBetweenBars = 3.dp.toPx()
-            val topPadding = 16.dp.toPx()
+            val topPadding = 28.dp.toPx()
             val drawableHeight = canvasHeight - topPadding
 
-            val linePoints = mutableListOf<Offset>()
+            val colTextPaint = Paint().apply {
+                color = android.graphics.Color.DKGRAY
+                textSize = 9.sp.toPx()
+                textAlign = Paint.Align.CENTER
+                isAntiAlias = true
+            }
+
+            val lineTextPaint = Paint().apply {
+                color = android.graphics.Color.BLACK
+                textSize = 10.sp.toPx()
+                textAlign = Paint.Align.CENTER
+                isFakeBoldText = true
+                isAntiAlias = true
+            }
+
+            val linePoints = mutableListOf<Pair<Offset, Double>>()
 
             data.forEachIndexed { index, item ->
                 val slotCenter = (index * slotWidth) + (slotWidth / 2f)
 
+                // 1. Collected Bar (Light Green) + Data Label
                 val collectedHeight = ((item.collectedAmount / maxAmount) * drawableHeight).toFloat()
                 val collectedLeft = slotCenter - barWidth - (gapBetweenBars / 2f)
+                val collectedTop = canvasHeight - collectedHeight
                 drawRoundRect(
                     color = lightGreen,
-                    topLeft = Offset(collectedLeft, canvasHeight - collectedHeight),
+                    topLeft = Offset(collectedLeft, collectedTop),
                     size = Size(barWidth, collectedHeight),
                     cornerRadius = CornerRadius(4.dp.toPx(), 4.dp.toPx())
                 )
+                drawContext.canvas.nativeCanvas.drawText(
+                    formatCompactAmount(item.collectedAmount),
+                    collectedLeft + (barWidth / 2f),
+                    (collectedTop - 4.dp.toPx()).coerceAtLeast(12.dp.toPx()),
+                    colTextPaint
+                )
 
+                // 2. Pending Bar (Light Red) + Data Label
                 val pendingHeight = ((item.pendingAmount / maxAmount) * drawableHeight).toFloat()
                 val pendingLeft = slotCenter + (gapBetweenBars / 2f)
+                val pendingTop = canvasHeight - pendingHeight
                 drawRoundRect(
                     color = lightRed,
-                    topLeft = Offset(pendingLeft, canvasHeight - pendingHeight),
+                    topLeft = Offset(pendingLeft, pendingTop),
                     size = Size(barWidth, pendingHeight),
                     cornerRadius = CornerRadius(4.dp.toPx(), 4.dp.toPx())
                 )
+                drawContext.canvas.nativeCanvas.drawText(
+                    formatCompactAmount(item.pendingAmount),
+                    pendingLeft + (barWidth / 2f),
+                    (pendingTop - 4.dp.toPx()).coerceAtLeast(12.dp.toPx()),
+                    colTextPaint
+                )
 
+                // 3. % Pending Line Point
                 val clampedPct = item.pendingPercentage.coerceIn(0.0, 100.0)
                 val pointY = canvasHeight - ((clampedPct / 100.0) * drawableHeight).toFloat()
-                linePoints.add(Offset(slotCenter, pointY))
+                linePoints.add(Offset(slotCenter, pointY) to item.pendingPercentage)
             }
 
             if (linePoints.size > 1) {
                 val path = Path().apply {
-                    moveTo(linePoints.first().x, linePoints.first().y)
+                    moveTo(linePoints.first().first.x, linePoints.first().first.y)
                     for (i in 1 until linePoints.size) {
-                        lineTo(linePoints[i].x, linePoints[i].y)
+                        lineTo(linePoints[i].first.x, linePoints[i].first.y)
                     }
                 }
                 drawPath(
@@ -690,11 +851,18 @@ fun ClusteredCollectionComboChart(data: List<MonthlyFinancialMetrics>) {
                 )
             }
 
-            linePoints.forEach { pt ->
+            // 4. Filled Dot Markers + Line Data Labels (% Pending)
+            linePoints.forEach { (pt, pctValue) ->
                 drawCircle(
                     color = lineColor,
                     radius = 4.5.dp.toPx(),
                     center = pt
+                )
+                drawContext.canvas.nativeCanvas.drawText(
+                    "%.0f%%".format(pctValue),
+                    pt.x,
+                    (pt.y - 7.dp.toPx()).coerceAtLeast(12.dp.toPx()),
+                    lineTextPaint
                 )
             }
         }
@@ -715,17 +883,6 @@ fun ClusteredCollectionComboChart(data: List<MonthlyFinancialMetrics>) {
                         style = MaterialTheme.typography.labelSmall,
                         fontWeight = FontWeight.Bold,
                         color = MaterialTheme.colorScheme.onSurface
-                    )
-                    Text(
-                        text = "%.0f%% pend".format(item.pendingPercentage),
-                        style = MaterialTheme.typography.labelSmall,
-                        color = Color.Black,
-                        fontWeight = FontWeight.SemiBold
-                    )
-                    Text(
-                        text = "₹%.0f / ₹%.0f".format(item.collectedAmount, item.pendingAmount),
-                        style = MaterialTheme.typography.labelSmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant
                     )
                 }
             }
@@ -793,7 +950,7 @@ fun DynamicAttendanceCalendar(
                         fontWeight = FontWeight.Bold
                     )
                     Text(
-                        text = "Superscript = active associates entered",
+                        text = "Top-right badge = active associates entered",
                         style = MaterialTheme.typography.labelSmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant
                     )
@@ -839,16 +996,13 @@ fun DynamicAttendanceCalendar(
                     ) {
                         week.forEach { cell ->
                             if (cell == null) {
-                                Box(modifier = Modifier.weight(1f).height(40.dp))
+                                Box(modifier = Modifier.weight(1f).height(44.dp))
                             } else {
                                 val (dayNumber, dateStr) = cell
                                 val count = associateCountByDate[dateStr] ?: 0
                                 val dupStatus = duplicateStatusByDate[dateStr] ?: DuplicateHighlightStatus.NONE
                                 val isSelected = selectedDate == dateStr
                                 val isToday = todayFormatted == dateStr
-
-                                val superscript = if (count > 0) toSuperscript(count) else ""
-                                val displayLabel = "$dayNumber$superscript"
 
                                 val containerColor = when {
                                     isSelected -> MaterialTheme.colorScheme.primary
@@ -868,7 +1022,7 @@ fun DynamicAttendanceCalendar(
                                 Surface(
                                     modifier = Modifier
                                         .weight(1f)
-                                        .height(40.dp)
+                                        .height(44.dp)
                                         .clip(RoundedCornerShape(8.dp))
                                         .clickable { onDateClick(dateStr) },
                                     color = containerColor,
@@ -877,14 +1031,29 @@ fun DynamicAttendanceCalendar(
                                         BorderStroke(1.5.dp, MaterialTheme.colorScheme.primary)
                                     } else null
                                 ) {
-                                    Box(contentAlignment = Alignment.Center) {
+                                    // Date centered/bottom-left, Associate count pinned far away in TOP-RIGHT corner
+                                    Box(
+                                        modifier = Modifier
+                                            .fillMaxSize()
+                                            .padding(horizontal = 4.dp, vertical = 2.dp)
+                                    ) {
                                         Text(
-                                            text = displayLabel,
+                                            text = dayNumber.toString(),
                                             style = MaterialTheme.typography.bodyMedium,
                                             fontWeight = if (count > 0 || isSelected) FontWeight.Bold else FontWeight.Normal,
                                             color = textColor,
-                                            maxLines = 1
+                                            modifier = Modifier.align(Alignment.Center)
                                         )
+
+                                        if (count > 0) {
+                                            Text(
+                                                text = count.toString(),
+                                                style = MaterialTheme.typography.labelSmall.copy(fontSize = 9.sp),
+                                                fontWeight = FontWeight.ExtraBold,
+                                                color = if (isSelected) MaterialTheme.colorScheme.onPrimary else MaterialTheme.colorScheme.primary,
+                                                modifier = Modifier.align(Alignment.TopEnd)
+                                            )
+                                        }
                                     }
                                 }
                             }
@@ -905,22 +1074,6 @@ fun DynamicAttendanceCalendar(
             }
         }
     }
-}
-
-private fun toSuperscript(number: Int): String {
-    val superscriptDigits = mapOf(
-        '0' to '⁰',
-        '1' to '¹',
-        '2' to '²',
-        '3' to '³',
-        '4' to '⁴',
-        '5' to '⁵',
-        '6' to '⁶',
-        '7' to '⁷',
-        '8' to '⁸',
-        '9' to '⁹'
-    )
-    return number.toString().map { superscriptDigits[it] ?: it }.joinToString("")
 }
 
 @Composable
