@@ -58,6 +58,11 @@ class WorkViewModel : ViewModel() {
         )
     )
 
+    // Enrolled Pincodes managed by Admin (defaulting to full Tamil Nadu pincode list)
+    val masterPincodes = MutableStateFlow<List<MasterItem>>(
+        tamilNaduPincodeList.map { MasterItem(it.pincode, true) }
+    )
+
     val visitCounts: List<String> = listOf("1", "2", "3", "4", "5+")
     val pastDates: List<String> = generateDatesList()
 
@@ -116,6 +121,16 @@ class WorkViewModel : ViewModel() {
         return formatProperCase(raw)
     }
 
+    fun normalizeCustomerName(raw: String): String {
+        return formatProperCase(raw)
+    }
+
+    // Auto-fetch Place & District for any pincode from the embedded database
+    fun lookupPincodeDetails(pin: String): Pair<String, String>? {
+        val cleaned = pin.trim()
+        return tamilNaduPincodeMap[cleaned]
+    }
+
     private fun parseCloudList(rawList: List<*>?, type: String): List<MasterItem>? {
         if (rawList == null) return null
         val seenNames = mutableSetOf<String>()
@@ -156,10 +171,12 @@ class WorkViewModel : ViewModel() {
             val cloudEmp = parseCloudList(snapshot.get("employees") as? List<*>, type = "employee")
             val cloudWork = parseCloudList(snapshot.get("workIds") as? List<*>, type = "workId")
             val cloudAct = parseCloudList(snapshot.get("activities") as? List<*>, type = "activity")
+            val cloudPins = parseCloudList(snapshot.get("pincodes") as? List<*>, type = "pincode")
 
             cloudEmp?.let { masterEmployees.value = it }
             cloudWork?.let { masterWorkIds.value = it }
             cloudAct?.let { masterActivities.value = it }
+            cloudPins?.let { masterPincodes.value = it }
         }
     }
 
@@ -172,21 +189,22 @@ class WorkViewModel : ViewModel() {
                     val rec = doc.toObject(WorkRecord::class.java)?.copy(id = doc.id)
                     rec?.copy(
                         activity = normalizeActivityName(rec.activity),
-                        employeeName = normalizeAssociateName(rec.employeeName)
+                        employeeName = normalizeAssociateName(rec.employeeName),
+                        customerName = normalizeCustomerName(rec.customerName)
                     )
                 }
                 _records.value = cloudList
             }
     }
 
-    // --- MERGE & STANDARDIZE ACTIVITIES AND ASSOCIATES IN FIRESTORE ---
+    // --- STANDARDIZE ACTIVITIES, ASSOCIATES & CUSTOMER NAMES IN FIRESTORE ---
     fun standardizeAndMergeMasterDataInCloud() {
         viewModelScope.launch {
             isSyncing.value = true
             syncHasError.value = false
             syncProgress.value = 0.25f
             syncPercentage.value = "25%"
-            syncStatusMessage.value = "Standardizing Activities & Associates to Proper Case..."
+            syncStatusMessage.value = "Standardizing Activities, Associates & Customers to Proper Case..."
 
             // 1. Deduplicate masterActivities
             val mergedActivities = linkedMapOf<String, MasterItem>()
@@ -224,9 +242,9 @@ class WorkViewModel : ViewModel() {
 
             syncProgress.value = 0.60f
             syncPercentage.value = "60%"
-            syncStatusMessage.value = "Renaming historical records in Cloud..."
+            syncStatusMessage.value = "Standardizing historical records (Customers, Associates, Activities)..."
 
-            // 3. Batch update any historical Firestore documents
+            // 3. Batch update all historical Firestore documents to Proper Case
             recordsCollection.get()
                 .addOnSuccessListener { querySnapshot ->
                     val batch = db.batch()
@@ -236,10 +254,13 @@ class WorkViewModel : ViewModel() {
                         val cleanAct = normalizeActivityName(rawAct)
                         val rawEmp = doc.getString("employeeName") ?: ""
                         val cleanEmp = normalizeAssociateName(rawEmp)
+                        val rawCust = doc.getString("customerName") ?: ""
+                        val cleanCust = normalizeCustomerName(rawCust)
 
                         val updates = mutableMapOf<String, Any>()
                         if (rawAct != cleanAct && cleanAct.isNotBlank()) updates["activity"] = cleanAct
                         if (rawEmp != cleanEmp && cleanEmp.isNotBlank()) updates["employeeName"] = cleanEmp
+                        if (rawCust != cleanCust && cleanCust.isNotBlank()) updates["customerName"] = cleanCust
 
                         if (updates.isNotEmpty()) {
                             batch.update(doc.reference, updates)
@@ -278,7 +299,13 @@ class WorkViewModel : ViewModel() {
         syncStatusMessage.value = "Status changed! Click 'Sync to All Devices' to push."
     }
 
-    // Maintains Proper Case for Associate names
+    fun togglePincodeStatus(pin: String) {
+        masterPincodes.value = masterPincodes.value.map {
+            if (it.name == pin) it.copy(isActive = !it.isActive) else it
+        }
+        syncStatusMessage.value = "Pincode status changed! Click 'Sync to All Devices' to push."
+    }
+
     fun addMasterEmployee(name: String) {
         val properEmp = normalizeAssociateName(name)
         if (properEmp.isNotBlank() && masterEmployees.value.none { it.name.equals(properEmp, ignoreCase = true) }) {
@@ -299,7 +326,6 @@ class WorkViewModel : ViewModel() {
         }
     }
 
-    // Maintains Proper Case for Activities
     fun addMasterActivity(activity: String) {
         val properName = normalizeActivityName(activity)
         if (properName.isNotBlank() && masterActivities.value.none { it.name.equals(properName, ignoreCase = true) }) {
@@ -309,6 +335,35 @@ class WorkViewModel : ViewModel() {
         } else if (properName.isNotBlank()) {
             syncStatusMessage.value = "'$properName' already exists in the list."
         }
+    }
+
+    // Enroll a new Pincode in Admin Master Data (Place & District auto-fetched from database)
+    fun addMasterPincode(pin: String): Boolean {
+        val cleaned = pin.trim()
+        if (cleaned.length != 6 || !cleaned.all { it.isDigit() }) {
+            syncStatusMessage.value = "Enter a valid 6-digit Pincode."
+            return false
+        }
+        val dbDetails = lookupPincodeDetails(cleaned)
+        if (dbDetails == null) {
+            syncStatusMessage.value = "Pincode $cleaned not found in Tamil Nadu database."
+            return false
+        }
+
+        val existingIndex = masterPincodes.value.indexOfFirst { it.name == cleaned }
+        if (existingIndex >= 0) {
+            // Re-activate and move to top if already present
+            val updated = masterPincodes.value.toMutableList()
+            updated.removeAt(existingIndex)
+            updated.add(0, MasterItem(cleaned, true))
+            masterPincodes.value = updated
+            syncStatusMessage.value = "Pincode $cleaned (${dbDetails.first}, ${dbDetails.second}) activated!"
+        } else {
+            masterPincodes.value = listOf(MasterItem(cleaned, true)) + masterPincodes.value
+            syncStatusMessage.value = "Enrolled $cleaned (${dbDetails.first}, ${dbDetails.second}). Click 'Sync to All Devices'."
+        }
+        syncHasError.value = false
+        return true
     }
 
     fun syncMasterDataToCloud() {
@@ -332,7 +387,8 @@ class WorkViewModel : ViewModel() {
             val payload = hashMapOf(
                 "employees" to masterEmployees.value.map { mapOf("name" to normalizeAssociateName(it.name), "isActive" to it.isActive) },
                 "workIds" to masterWorkIds.value.map { mapOf("name" to it.name, "isActive" to it.isActive) },
-                "activities" to masterActivities.value.map { mapOf("name" to normalizeActivityName(it.name), "isActive" to it.isActive) }
+                "activities" to masterActivities.value.map { mapOf("name" to normalizeActivityName(it.name), "isActive" to it.isActive) },
+                "pincodes" to masterPincodes.value.map { mapOf("name" to it.name.trim(), "isActive" to it.isActive) }
             )
 
             val completed = withTimeoutOrNull(8000) {
@@ -386,7 +442,8 @@ class WorkViewModel : ViewModel() {
 
     fun saveRecord(): Boolean {
         val s = _formState.value
-        if (s.customerName.isBlank() || s.phoneNumber.length != 10 || !s.phoneNumber.all { char -> char.isDigit() }) {
+        val properCustomer = normalizeCustomerName(s.customerName)
+        if (properCustomer.isBlank() || s.phoneNumber.length != 10 || !s.phoneNumber.all { char -> char.isDigit() }) {
             return false
         }
 
@@ -398,11 +455,11 @@ class WorkViewModel : ViewModel() {
             workId = s.workId,
             date = s.date,
             activity = normalizeActivityName(s.activity),
-            customerName = formatProperCase(s.customerName),
+            customerName = properCustomer,
             pincode = s.pincode,
             place = s.place,
             district = s.district,
-            location = "${s.pincode} - ${s.place},${s.district}",
+            location = "${s.pincode} - ${s.place}, ${s.district}",
             visitCount = s.visitCount,
             totalAmount = s.totalAmount.toDoubleOrNull() ?: 0.0,
             advanceAmount = s.advanceAmount.toDoubleOrNull() ?: 0.0,
@@ -457,7 +514,9 @@ class WorkViewModel : ViewModel() {
     }
 
     private fun resetFormToDefaults() {
-        val defaultPin = tamilNaduPincodeList.firstOrNull()?.pincode ?: "641601"
+        val defaultPin = masterPincodes.value.firstOrNull { it.isActive }?.name
+            ?: tamilNaduPincodeList.firstOrNull()?.pincode
+            ?: "641601"
         val pair = tamilNaduPincodeMap[defaultPin]
         _formState.value = EntryFormState(
             employeeName = masterEmployees.value.firstOrNull { it.isActive }?.name ?: "",
@@ -465,7 +524,7 @@ class WorkViewModel : ViewModel() {
             date = pastDates.firstOrNull() ?: "",
             activity = masterActivities.value.firstOrNull { it.isActive }?.name ?: "",
             pincode = defaultPin,
-            place = pair?.first ?: "Tirupur",
+            place = pair?.first ?: "Tirupur Head Post",
             district = pair?.second ?: "Tiruppur",
             visitCount = "1"
         )
