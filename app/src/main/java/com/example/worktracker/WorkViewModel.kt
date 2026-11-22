@@ -52,7 +52,9 @@ class WorkViewModel : ViewModel() {
             MasterItem("New Installation", true),
             MasterItem("Maintenance", true),
             MasterItem("Emergency Repair", true),
-            MasterItem("Audit", true)
+            MasterItem("Audit", true),
+            MasterItem("Valuation", true),
+            MasterItem("Stability", true)
         )
     )
 
@@ -80,31 +82,58 @@ class WorkViewModel : ViewModel() {
 
     // Filters & Calendar Selection
     val searchQuery = MutableStateFlow("")
-    val selectedMonthFilter = MutableStateFlow("All")      // Format: "MMM-yy" e.g., "Nov-26"
+    val selectedMonthFilter = MutableStateFlow("All")
     val selectedDistrictFilter = MutableStateFlow("All")
     val selectedActivityFilter = MutableStateFlow("All")
     val selectedWorkIdFilter = MutableStateFlow("All")
     val selectedEmployeeFilter = MutableStateFlow("All")
-    val selectedCalendarDate = MutableStateFlow<String?>(null) // Format: "dd-MMM-yy"
+    val selectedCalendarDate = MutableStateFlow<String?>(null)
 
     init {
         listenToMasterData()
         listenToWorkRecords()
     }
 
-    private fun parseCloudList(rawList: List<*>?): List<MasterItem>? {
+    // --- PROPER CASE & ACTIVITY NORMALIZATION HELPER ---
+    fun formatProperCase(input: String): String {
+        val cleaned = input.trim().replace(Regex("\\s+"), " ")
+        if (cleaned.isEmpty()) return ""
+        return cleaned.split(" ").joinToString(" ") { word ->
+            word.lowercase(Locale.ENGLISH).replaceFirstChar { ch ->
+                if (ch.isLowerCase()) ch.titlecase(Locale.ENGLISH) else ch.toString()
+            }
+        }
+    }
+
+    fun normalizeActivityName(raw: String): String {
+        val proper = formatProperCase(raw)
+        return when {
+            proper.equals("Valuation", ignoreCase = true) -> "Valuation"
+            proper.equals("Stability", ignoreCase = true) -> "Stability"
+            else -> proper
+        }
+    }
+
+    private fun parseCloudList(rawList: List<*>?, isActivityList: Boolean = false): List<MasterItem>? {
         if (rawList == null) return null
+        val seenNames = mutableSetOf<String>()
         val items = mutableListOf<MasterItem>()
         for (item in rawList) {
+            var name = ""
+            var active = true
             when (item) {
                 is Map<*, *> -> {
-                    val name = item["name"] as? String ?: ""
-                    val active = item["isActive"] as? Boolean ?: (item["active"] as? Boolean ?: true)
-                    if (name.isNotBlank()) items.add(MasterItem(name, active))
+                    name = item["name"] as? String ?: ""
+                    active = item["isActive"] as? Boolean ?: (item["active"] as? Boolean ?: true)
                 }
                 is String -> {
-                    if (item.isNotBlank()) items.add(MasterItem(item, true))
+                    name = item
                 }
+            }
+            val normalizedName = if (isActivityList) normalizeActivityName(name) else name.trim()
+            val key = normalizedName.lowercase(Locale.ENGLISH)
+            if (normalizedName.isNotBlank() && seenNames.add(key)) {
+                items.add(MasterItem(normalizedName, active))
             }
         }
         return if (items.isNotEmpty()) items else null
@@ -118,9 +147,9 @@ class WorkViewModel : ViewModel() {
             }
             if (snapshot == null || !snapshot.exists()) return@addSnapshotListener
 
-            val cloudEmp = parseCloudList(snapshot.get("employees") as? List<*>)
-            val cloudWork = parseCloudList(snapshot.get("workIds") as? List<*>)
-            val cloudAct = parseCloudList(snapshot.get("activities") as? List<*>)
+            val cloudEmp = parseCloudList(snapshot.get("employees") as? List<*>, isActivityList = false)
+            val cloudWork = parseCloudList(snapshot.get("workIds") as? List<*>, isActivityList = false)
+            val cloudAct = parseCloudList(snapshot.get("activities") as? List<*>, isActivityList = true)
 
             cloudEmp?.let { masterEmployees.value = it }
             cloudWork?.let { masterWorkIds.value = it }
@@ -134,10 +163,70 @@ class WorkViewModel : ViewModel() {
             .addSnapshotListener { snapshot, error ->
                 if (error != null || snapshot == null) return@addSnapshotListener
                 val cloudList = snapshot.documents.mapNotNull { doc ->
-                    doc.toObject(WorkRecord::class.java)?.copy(id = doc.id)
+                    val rec = doc.toObject(WorkRecord::class.java)?.copy(id = doc.id)
+                    rec?.copy(activity = normalizeActivityName(rec.activity))
                 }
                 _records.value = cloudList
             }
+    }
+
+    // --- MERGE "Valuation"/"valuation" -> "Valuation" & RENAME "stability" -> "Stability" IN FIRESTORE ---
+    fun standardizeAndMergeActivitiesInCloud() {
+        viewModelScope.launch {
+            isSyncing.value = true
+            syncHasError.value = false
+            syncProgress.value = 0.25f
+            syncPercentage.value = "25%"
+            syncStatusMessage.value = "Merging & standardizing activities..."
+
+            // 1. Deduplicate masterActivities with Proper Case ("Valuation", "Stability")
+            val mergedMap = linkedMapOf<String, MasterItem>()
+            for (item in masterActivities.value) {
+                val cleanName = normalizeActivityName(item.name)
+                val key = cleanName.lowercase(Locale.ENGLISH)
+                val existing = mergedMap[key]
+                if (existing == null) {
+                    mergedMap[key] = MasterItem(cleanName, item.isActive)
+                } else {
+                    mergedMap[key] = existing.copy(isActive = existing.isActive || item.isActive)
+                }
+            }
+            // Ensure Valuation and Stability exist cleanly
+            if (!mergedMap.containsKey("valuation")) {
+                mergedMap["valuation"] = MasterItem("Valuation", true)
+            }
+            if (!mergedMap.containsKey("stability")) {
+                mergedMap["stability"] = MasterItem("Stability", true)
+            }
+            masterActivities.value = mergedMap.values.toList()
+
+            syncProgress.value = 0.60f
+            syncPercentage.value = "60%"
+            syncStatusMessage.value = "Updating historical records..."
+
+            // 2. Batch update any historical Firestore documents whose activity isn't normalized
+            recordsCollection.get()
+                .addOnSuccessListener { querySnapshot ->
+                    val batch = db.batch()
+                    var updatedCount = 0
+                    for (doc in querySnapshot.documents) {
+                        val rawAct = doc.getString("activity") ?: ""
+                        val cleanAct = normalizeActivityName(rawAct)
+                        if (rawAct != cleanAct && cleanAct.isNotBlank()) {
+                            batch.update(doc.reference, "activity", cleanAct)
+                            updatedCount++
+                        }
+                    }
+                    if (updatedCount > 0) {
+                        batch.commit()
+                    }
+                    // 3. Push merged master lists to cloud
+                    syncMasterDataToCloud()
+                }
+                .addOnFailureListener {
+                    syncMasterDataToCloud()
+                }
+        }
     }
 
     fun toggleEmployeeStatus(name: String) {
@@ -179,12 +268,15 @@ class WorkViewModel : ViewModel() {
         }
     }
 
+    // Enforces Proper Case (First letter of every word capitalized) when adding an activity
     fun addMasterActivity(activity: String) {
-        val trimmed = activity.trim()
-        if (trimmed.isNotBlank() && masterActivities.value.none { it.name.equals(trimmed, ignoreCase = true) }) {
-            masterActivities.value = masterActivities.value + MasterItem(trimmed, true)
-            syncStatusMessage.value = "Unsaved changes! Click 'Sync to All Devices'."
+        val properName = normalizeActivityName(activity)
+        if (properName.isNotBlank() && masterActivities.value.none { it.name.equals(properName, ignoreCase = true) }) {
+            masterActivities.value = masterActivities.value + MasterItem(properName, true)
+            syncStatusMessage.value = "Added '$properName'. Click 'Sync to All Devices'."
             syncHasError.value = false
+        } else if (properName.isNotBlank()) {
+            syncStatusMessage.value = "'$properName' already exists in the list."
         }
     }
 
@@ -209,7 +301,7 @@ class WorkViewModel : ViewModel() {
             val payload = hashMapOf(
                 "employees" to masterEmployees.value.map { mapOf("name" to it.name, "isActive" to it.isActive) },
                 "workIds" to masterWorkIds.value.map { mapOf("name" to it.name, "isActive" to it.isActive) },
-                "activities" to masterActivities.value.map { mapOf("name" to it.name, "isActive" to it.isActive) }
+                "activities" to masterActivities.value.map { mapOf("name" to normalizeActivityName(it.name), "isActive" to it.isActive) }
             )
 
             val completed = withTimeoutOrNull(8000) {
@@ -273,12 +365,12 @@ class WorkViewModel : ViewModel() {
             employeeName = assignedEmployee,
             workId = s.workId,
             date = s.date,
-            activity = s.activity,
+            activity = normalizeActivityName(s.activity),
             customerName = s.customerName.trim(),
             pincode = s.pincode,
             place = s.place,
             district = s.district,
-            location = "${s.pincode} - ${s.place}, ${s.district}",
+            location = "${s.pincode} - ${s.place},${s.district}",
             visitCount = s.visitCount,
             totalAmount = s.totalAmount.toDoubleOrNull() ?: 0.0,
             advanceAmount = s.advanceAmount.toDoubleOrNull() ?: 0.0,
@@ -346,7 +438,6 @@ class WorkViewModel : ViewModel() {
         )
     }
 
-    // Slicer-filtered records (includes Month slicer, excludes Calendar Day selection)
     val slicerFilteredRecords = combine(
         _records,
         _currentUserRole,
@@ -371,7 +462,7 @@ class WorkViewModel : ViewModel() {
             val recordMonth = extractMonthYear(record.date)
             val matchMonth = month == "All" || recordMonth.equals(month, ignoreCase = true)
             val matchDist = inter.loc == "All" || record.district.equals(inter.loc, ignoreCase = true)
-            val matchAct = act == "All" || record.activity == act
+            val matchAct = act == "All" || record.activity.equals(act, ignoreCase = true)
             val matchWork = work == "All" || record.workId == work
             val matchQuery = inter.query.isBlank() ||
                 record.customerName.contains(inter.query, ignoreCase = true) ||
@@ -387,7 +478,6 @@ class WorkViewModel : ViewModel() {
         }
     }
 
-    // Final records shown in the list (incorporates calendar date filter if selected)
     val visibleRecords = combine(slicerFilteredRecords, selectedCalendarDate) { recs, calDate ->
         if (calDate == null) {
             recs
