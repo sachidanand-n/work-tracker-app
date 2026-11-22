@@ -6,9 +6,7 @@ import android.net.Uri
 import android.widget.Toast
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.Canvas
-import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
-import androidx.compose.foundation.basicMarquee
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.*
@@ -21,15 +19,14 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.KeyboardArrowLeft
 import androidx.compose.material.icons.automirrored.filled.KeyboardArrowRight
+import androidx.compose.material.icons.automirrored.filled.Send
+import androidx.compose.material.icons.filled.AddAlert
 import androidx.compose.material.icons.filled.AutoAwesome
 import androidx.compose.material.icons.filled.Call
-import androidx.compose.material.icons.filled.Campaign
 import androidx.compose.material.icons.filled.Clear
-import androidx.compose.material.icons.filled.Close
+import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.EventBusy
-import androidx.compose.material.icons.filled.PushPin
 import androidx.compose.material.icons.filled.Search
-import androidx.compose.material.icons.filled.Send
 import androidx.compose.material.icons.filled.Warning
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
@@ -72,28 +69,33 @@ data class MonthlyFinancialMetrics(
     val pendingPercentage: Double
 )
 
-data class AiInsightsReport(
-    val bullets: List<String>,
-    val recommendedReminderText: String,
-    val topPendingRecord: WorkRecord?,
-    val topPendingAmount: Double,
-    val missedDatesDdMmYy: List<String>
-)
-
 sealed class AssociateDailyRow {
     data class Entered(val record: WorkRecord) : AssociateDailyRow()
     data class NotEntered(val associateName: String) : AssociateDailyRow()
 }
 
-@OptIn(ExperimentalFoundationApi::class)
+data class AiSummaryAnalysis(
+    val scopeDescription: String,
+    val totalEntries: Int,
+    val totalBilled: Double,
+    val totalCollected: Double,
+    val totalPending: Double,
+    val pendingRate: Double,
+    val uniqueCustomersCount: Int,
+    val repeatedVisitsList: List<Pair<String, Int>>,
+    val topPendingCustomer: String?,
+    val topPendingPhone: String?,
+    val topPendingAmount: Double,
+    val missedDates: List<String>
+)
+
 @Composable
 fun DashboardScreen(viewModel: WorkViewModel) {
-    val context = LocalContext.current
     val allRecords by viewModel.records.collectAsState()
     val slicerRecords by viewModel.slicerFilteredRecords.collectAsState(initial = emptyList())
     val visibleRecords by viewModel.visibleRecords.collectAsState(initial = emptyList())
     val selectedCalDate by viewModel.selectedCalendarDate.collectAsState()
-    val adminReminder by viewModel.adminScrollingReminder.collectAsState()
+    val reminders by viewModel.broadcastReminders.collectAsState()
 
     val search by viewModel.searchQuery.collectAsState()
     val role by viewModel.currentUserRole.collectAsState()
@@ -108,6 +110,10 @@ fun DashboardScreen(viewModel: WorkViewModel) {
     val masterActs by viewModel.masterActivities.collectAsState()
     val masterWorks by viewModel.masterWorkIds.collectAsState()
     val masterEmps by viewModel.masterEmployees.collectAsState()
+
+    val activeEmployeeNames = remember(masterEmps) {
+        masterEmps.filter { it.isActive }.map { it.name }.sorted()
+    }
 
     var showAiSummaryDialog by remember { mutableStateOf(false) }
 
@@ -181,6 +187,42 @@ fun DashboardScreen(viewModel: WorkViewModel) {
                     null
                 }
             }
+    }
+
+    // Live Scrolling Marquee Text for Dashboard (Admin & User)
+    val dashboardMarqueeText = remember(reminders, duplicateAnnouncements, visibleRecords, role, loggedInEmp) {
+        val parts = mutableListOf<String>()
+
+        val visibleReminders = if (role == UserRole.ADMIN) {
+            reminders
+        } else {
+            reminders.filter {
+                it.targetAssociate.equals("ALL", ignoreCase = true) ||
+                    it.targetAssociate.equals(loggedInEmp, ignoreCase = true)
+            }
+        }
+        visibleReminders.forEach { rem ->
+            val tag = if (rem.targetAssociate == "ALL") "ALL" else "To: ${rem.targetAssociate}"
+            parts.add("REMINDER [$tag]: ${rem.message}")
+        }
+
+        duplicateAnnouncements.forEach { dupMsg ->
+            parts.add("ALERT: $dupMsg")
+        }
+
+        val summary = analyzeAiSummaryData(visibleRecords, "Dashboard")
+        if (summary.topPendingCustomer != null && summary.topPendingAmount > 0.0) {
+            parts.add("TOP PENDING: ${summary.topPendingCustomer} (₹%.0f)".format(summary.topPendingAmount))
+        }
+        if (summary.missedDates.isNotEmpty()) {
+            parts.add("MISSED WORKING DATES: ${summary.missedDates.take(5).joinToString(", ")}")
+        }
+
+        if (parts.isEmpty()) {
+            "No urgent alerts • Tap 'AI Summary' to set reminders or view detailed insights"
+        } else {
+            parts.joinToString("     ★     ")
+        }
     }
 
     val dailyAssociateRows: List<AssociateDailyRow> = remember(selectedCalDate, visibleRecords, masterEmps, role, loggedInEmp, selectedEmp) {
@@ -262,51 +304,9 @@ fun DashboardScreen(viewModel: WorkViewModel) {
             }
         }
 
-        // --- SCROLLING ACTION REMINDER TICKER FOR ADMIN DASHBOARD ---
-        if (adminReminder.isNotBlank()) {
-            item {
-                Surface(
-                    modifier = Modifier.fillMaxWidth(),
-                    color = Color(0xFFE3F2FD),
-                    shape = RoundedCornerShape(8.dp),
-                    border = BorderStroke(1.dp, MaterialTheme.colorScheme.primary)
-                ) {
-                    Row(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .padding(horizontal = 10.dp, vertical = 6.dp),
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
-                        Icon(
-                            imageVector = Icons.Default.Campaign,
-                            contentDescription = "Admin Reminder",
-                            tint = MaterialTheme.colorScheme.primary,
-                            modifier = Modifier.size(18.dp)
-                        )
-                        Spacer(modifier = Modifier.width(8.dp))
-                        Text(
-                            text = adminReminder,
-                            style = MaterialTheme.typography.bodySmall,
-                            fontWeight = FontWeight.Bold,
-                            color = MaterialTheme.colorScheme.onSurface,
-                            maxLines = 1,
-                            modifier = Modifier
-                                .weight(1f)
-                                .basicMarquee(iterations = Int.MAX_VALUE)
-                        )
-                        IconButton(
-                            onClick = { viewModel.clearAdminReminder() },
-                            modifier = Modifier.size(24.dp)
-                        ) {
-                            Icon(
-                                imageVector = Icons.Default.Close,
-                                contentDescription = "Clear Reminder",
-                                modifier = Modifier.size(14.dp)
-                            )
-                        }
-                    }
-                }
-            }
+        // --- SCROLLING REMINDER & INSIGHTS MARQUEE TICKER ---
+        item {
+            ScrollingReminderBanner(message = dashboardMarqueeText)
         }
 
         // Search Bar
@@ -591,7 +591,7 @@ fun DashboardScreen(viewModel: WorkViewModel) {
         }
     }
 
-    // --- ACTIONABLE AI SUMMARY DIALOG ---
+    // Actionable AI Summary Dialog
     if (showAiSummaryDialog) {
         val activeFilters = mutableListOf<String>()
         if (selectedMonth != "All") activeFilters.add("Month: $selectedMonth")
@@ -602,132 +602,234 @@ fun DashboardScreen(viewModel: WorkViewModel) {
         if (selectedCalDate != null) activeFilters.add("Date: $selectedCalDate")
         val scopeLabel = if (activeFilters.isEmpty()) "All Records" else activeFilters.joinToString(" | ")
 
-        val insightsData = remember(visibleRecords, scopeLabel) {
-            analyzeAiInsightsData(
-                records = visibleRecords,
-                scopeDescription = scopeLabel
-            )
-        }
+        ActionableAiSummaryDialog(
+            title = "AI Summary & Actions",
+            records = visibleRecords,
+            scopeDescription = scopeLabel,
+            isAdmin = role == UserRole.ADMIN,
+            activeAssociates = activeEmployeeNames,
+            reminders = reminders,
+            onAddReminder = { target, msg -> viewModel.addBroadcastReminder(target, msg) },
+            onDeleteReminder = { id -> viewModel.deleteBroadcastReminder(id) },
+            onSelectMissedDate = null,
+            onDismiss = { showAiSummaryDialog = false }
+        )
+    }
+}
 
-        AlertDialog(
-            onDismissRequest = { showAiSummaryDialog = false },
-            icon = { Icon(Icons.Default.AutoAwesome, contentDescription = null, tint = MaterialTheme.colorScheme.primary) },
-            title = { Text("AI Action Summary", fontWeight = FontWeight.Bold) },
-            text = {
-                Column(
-                    modifier = Modifier.verticalScroll(rememberScrollState()),
-                    verticalArrangement = Arrangement.spacedBy(10.dp)
-                ) {
-                    insightsData.bullets.forEach { bullet ->
-                        Text(text = "• $bullet", style = MaterialTheme.typography.bodyMedium)
+@OptIn(ExperimentalLayoutApi::class)
+@Composable
+fun ActionableAiSummaryDialog(
+    title: String,
+    records: List<WorkRecord>,
+    scopeDescription: String,
+    isAdmin: Boolean,
+    activeAssociates: List<String>,
+    reminders: List<BroadcastReminder>,
+    onAddReminder: (String, String) -> Unit,
+    onDeleteReminder: (String) -> Unit,
+    onSelectMissedDate: ((String) -> Unit)?,
+    onDismiss: () -> Unit
+) {
+    val context = LocalContext.current
+    val analysis = remember(records, scopeDescription) {
+        analyzeAiSummaryData(records, scopeDescription)
+    }
+
+    var reminderText by remember { mutableStateOf("") }
+    var reminderTarget by remember { mutableStateOf("ALL") }
+
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        icon = { Icon(Icons.Default.AutoAwesome, contentDescription = null, tint = MaterialTheme.colorScheme.primary) },
+        title = { Text(title, fontWeight = FontWeight.Bold) },
+        text = {
+            Column(
+                modifier = Modifier.verticalScroll(rememberScrollState()),
+                verticalArrangement = Arrangement.spacedBy(10.dp)
+            ) {
+                Text(
+                    text = "• Scope: ${analysis.scopeDescription} (${analysis.totalEntries} entries)",
+                    style = MaterialTheme.typography.bodySmall,
+                    fontWeight = FontWeight.SemiBold
+                )
+
+                Text(
+                    text = "• Financials: ₹%.0f billed | ₹%.0f collected | ₹%.0f pending (%.1f%%).".format(
+                        analysis.totalBilled, analysis.totalCollected, analysis.totalPending, analysis.pendingRate
+                    ),
+                    style = MaterialTheme.typography.bodySmall
+                )
+
+                Text(
+                    text = "• Customers Visited: ${analysis.uniqueCustomersCount} unique customer(s) visited.",
+                    style = MaterialTheme.typography.bodySmall
+                )
+
+                if (analysis.repeatedVisitsList.isNotEmpty()) {
+                    val repeatStr = analysis.repeatedVisitsList.take(5).joinToString(", ") { "${it.first} (${it.second} visits)" }
+                    Text(
+                        text = "• Repeated Customer Visits: $repeatStr",
+                        style = MaterialTheme.typography.bodySmall
+                    )
+                } else {
+                    Text(
+                        text = "• Repeated Customer Visits: None.",
+                        style = MaterialTheme.typography.bodySmall
+                    )
+                }
+
+                // Highest Pending Customer + One-Tap WhatsApp Follow-Up Action
+                if (analysis.topPendingCustomer != null && analysis.topPendingAmount > 0.0) {
+                    Text(
+                        text = "• Highest Pending Customer: ${analysis.topPendingCustomer} (₹%.0f pending)".format(analysis.topPendingAmount),
+                        style = MaterialTheme.typography.bodySmall,
+                        fontWeight = FontWeight.Bold,
+                        color = MaterialTheme.colorScheme.error
+                    )
+
+                    if (!analysis.topPendingPhone.isNullOrBlank()) {
+                        OutlinedButton(
+                            onClick = {
+                                val msg = "Hello ${analysis.topPendingCustomer}, gentle reminder regarding your pending balance of ₹%.0f with our service team.".format(analysis.topPendingAmount)
+                                val encoded = URLEncoder.encode(msg, "UTF-8")
+                                val uri = Uri.parse("https://wa.me/91${analysis.topPendingPhone}?text=$encoded")
+                                try {
+                                    context.startActivity(Intent(Intent.ACTION_VIEW, uri))
+                                } catch (_: Exception) {
+                                    Toast.makeText(context, "WhatsApp not installed", Toast.LENGTH_SHORT).show()
+                                }
+                            },
+                            modifier = Modifier.fillMaxWidth()
+                        ) {
+                            Icon(Icons.AutoMirrored.Filled.Send, contentDescription = null, modifier = Modifier.size(16.dp))
+                            Spacer(modifier = Modifier.width(6.dp))
+                            Text("Send WhatsApp Payment Reminder", style = MaterialTheme.typography.labelMedium)
+                        }
                     }
+                }
 
+                // Missed Non-Sunday Dates (Interactive Chips on Data Entry Screen)
+                if (analysis.missedDates.isNotEmpty()) {
+                    Text(
+                        text = "• Data Not Entered Dates (Excl. Sundays):",
+                        style = MaterialTheme.typography.bodySmall,
+                        fontWeight = FontWeight.Bold
+                    )
+
+                    FlowRow(
+                        horizontalArrangement = Arrangement.spacedBy(6.dp),
+                        verticalArrangement = Arrangement.spacedBy(4.dp)
+                    ) {
+                        analysis.missedDates.forEach { dStr ->
+                            if (onSelectMissedDate != null) {
+                                AssistChip(
+                                    onClick = { onSelectMissedDate(dStr) },
+                                    label = { Text("Log $dStr", style = MaterialTheme.typography.labelSmall) }
+                                )
+                            } else {
+                                SuggestionChip(
+                                    onClick = {},
+                                    label = { Text(dStr, style = MaterialTheme.typography.labelSmall) }
+                                )
+                            }
+                        }
+                    }
+                } else {
+                    Text(
+                        text = "• Data Not Entered Dates (Excl. Sundays): None — 100% logged!",
+                        style = MaterialTheme.typography.bodySmall
+                    )
+                }
+
+                // --- SET SCROLLING REMINDER ACTION (ADMIN) ---
+                if (isAdmin) {
                     Divider(modifier = Modifier.padding(vertical = 4.dp))
                     Text(
-                        text = "Convert Insights to Actions",
+                        text = "Pin Scrolling Reminder to Ticker",
                         style = MaterialTheme.typography.labelLarge,
                         fontWeight = FontWeight.Bold,
                         color = MaterialTheme.colorScheme.primary
                     )
 
-                    // Action 1: Pin to Dashboard Scrolling Bar
-                    OutlinedButton(
+                    AppDropdown(
+                        label = "Target Recipient",
+                        options = listOf("ALL") + activeAssociates,
+                        selectedOption = reminderTarget,
+                        onOptionSelected = { reminderTarget = it }
+                    )
+
+                    OutlinedTextField(
+                        value = reminderText,
+                        onValueChange = { reminderText = it },
+                        label = { Text("Reminder message...") },
+                        singleLine = true,
+                        modifier = Modifier.fillMaxWidth()
+                    )
+
+                    Button(
                         onClick = {
-                            viewModel.setAdminReminder(insightsData.recommendedReminderText)
-                            Toast.makeText(context, "Pinned to Dashboard scrolling banner!", Toast.LENGTH_SHORT).show()
-                            showAiSummaryDialog = false
+                            if (reminderText.isNotBlank()) {
+                                onAddReminder(reminderTarget, reminderText)
+                                reminderText = ""
+                                Toast.makeText(context, "Scrolling reminder published!", Toast.LENGTH_SHORT).show()
+                            }
                         },
+                        enabled = reminderText.isNotBlank(),
                         modifier = Modifier.fillMaxWidth()
                     ) {
-                        Icon(Icons.Default.PushPin, contentDescription = null, modifier = Modifier.size(16.dp))
+                        Icon(Icons.Default.AddAlert, contentDescription = null, modifier = Modifier.size(16.dp))
                         Spacer(modifier = Modifier.width(6.dp))
-                        Text("Pin Reminder to Dashboard")
+                        Text("Broadcast to Scrolling Ticker")
                     }
 
-                    // Action 2: Broadcast Reminder to Associate(s) Data Entry Screen
-                    if (role == UserRole.ADMIN) {
-                        OutlinedButton(
-                            onClick = {
-                                if (selectedEmp != "All") {
-                                    viewModel.setAssociateReminder(selectedEmp, insightsData.recommendedReminderText)
-                                    Toast.makeText(context, "Sent scrolling reminder to $selectedEmp!", Toast.LENGTH_SHORT).show()
-                                } else {
-                                    viewModel.broadcastReminderToAllAssociates(insightsData.recommendedReminderText)
-                                    Toast.makeText(context, "Broadcast scrolling reminder to all associates!", Toast.LENGTH_SHORT).show()
-                                }
-                                showAiSummaryDialog = false
-                            },
-                            modifier = Modifier.fillMaxWidth()
-                        ) {
-                            Icon(Icons.Default.Campaign, contentDescription = null, modifier = Modifier.size(16.dp))
-                            Spacer(modifier = Modifier.width(6.dp))
-                            Text(if (selectedEmp != "All") "Send Reminder to $selectedEmp" else "Broadcast Reminder to All Users")
-                        }
-                    }
-
-                    // Action 3: One-Tap WhatsApp Follow-Up for Highest Pending Customer
-                    if (insightsData.topPendingRecord != null && insightsData.topPendingAmount > 0.0) {
-                        val rec = insightsData.topPendingRecord
-                        OutlinedButton(
-                            onClick = {
-                                val msg = "Hello ${rec.customerName}, gentle reminder regarding pending balance of ₹%.0f for ${rec.activity} (Work ID: ${rec.workId}, Date: ${rec.date}).".format(
-                                    insightsData.topPendingAmount
+                    if (reminders.isNotEmpty()) {
+                        Text(
+                            text = "Active Ticker Reminders (${reminders.size}):",
+                            style = MaterialTheme.typography.labelSmall,
+                            fontWeight = FontWeight.Bold
+                        )
+                        reminders.forEach { rem ->
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                horizontalArrangement = Arrangement.SpaceBetween,
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Text(
+                                    text = "[${rem.targetAssociate}] ${rem.message}",
+                                    style = MaterialTheme.typography.bodySmall,
+                                    modifier = Modifier.weight(1f)
                                 )
-                                val encoded = URLEncoder.encode(msg, "UTF-8")
-                                val waUri = Uri.parse("https://wa.me/91${rec.phoneNumber}?text=$encoded")
-                                context.startActivity(Intent(Intent.ACTION_VIEW, waUri))
-                            },
-                            modifier = Modifier.fillMaxWidth()
-                        ) {
-                            Icon(Icons.Default.Send, contentDescription = null, modifier = Modifier.size(16.dp))
-                            Spacer(modifier = Modifier.width(6.dp))
-                            Text("WhatsApp Follow-Up (${rec.customerName})")
+                                IconButton(onClick = { onDeleteReminder(rem.id) }) {
+                                    Icon(Icons.Default.Delete, contentDescription = "Remove", tint = MaterialTheme.colorScheme.error, modifier = Modifier.size(18.dp))
+                                }
+                            }
                         }
                     }
-                }
-            },
-            confirmButton = {
-                Button(onClick = { showAiSummaryDialog = false }) {
-                    Text("Close")
                 }
             }
-        )
-    }
+        },
+        confirmButton = {
+            Button(onClick = onDismiss) {
+                Text("Close")
+            }
+        }
+    )
 }
 
-fun analyzeAiInsightsData(
+fun analyzeAiSummaryData(
     records: List<WorkRecord>,
     scopeDescription: String
-): AiInsightsReport {
-    val bullets = mutableListOf<String>()
-    bullets.add("Scope: $scopeDescription (${records.size} entries)")
-
-    if (records.isEmpty()) {
-        bullets.add("No work entries found for this selection.")
-        return AiInsightsReport(
-            bullets = bullets,
-            recommendedReminderText = "Reminder ($scopeDescription): No entries logged yet.",
-            topPendingRecord = null,
-            topPendingAmount = 0.0,
-            missedDatesDdMmYy = emptyList()
-        )
-    }
-
+): AiSummaryAnalysis {
     val totalBilled = records.sumOf { it.totalAmount }
     val totalCollected = records.sumOf { it.advanceAmount }
     val totalPending = records.sumOf { it.pendingAmount }
     val pendingRate = if (totalBilled > 0) (totalPending / totalBilled) * 100.0 else 0.0
-    bullets.add(
-        "Financials: ₹%.0f billed | ₹%.0f collected | ₹%.0f pending (%.1f%%).".format(
-            totalBilled, totalCollected, totalPending, pendingRate
-        )
-    )
 
     val distinctCustomers = records
         .map { it.customerName.trim() }
         .filter { it.isNotBlank() }
         .distinctBy { it.lowercase(Locale.ENGLISH) }
-    bullets.add("Customers Visited: ${distinctCustomers.size} unique customer(s) visited.")
 
     val customerVisits = records
         .filter { it.customerName.isNotBlank() }
@@ -741,58 +843,34 @@ fun analyzeAiInsightsData(
         .values
         .sortedByDescending { it.second }
 
-    if (customerVisits.isNotEmpty()) {
-        val repeatSummary = customerVisits.take(5).joinToString(", ") { "${it.first} (${it.second} visits)" }
-        bullets.add("Repeated Customer Visits: $repeatSummary")
-    } else {
-        bullets.add("Repeated Customer Visits: None (all customers visited once).")
-    }
-
-    val groupedByCustomerPending = records
+    val topPendingEntry = records
         .filter { it.customerName.isNotBlank() }
         .groupBy { it.customerName.trim().lowercase(Locale.ENGLISH) }
         .mapValues { (_, list) ->
-            val totalCustPending = list.sumOf { it.pendingAmount }
-            val latestRec = list.maxByOrNull { it.timestamp }!!
-            Pair(latestRec, totalCustPending)
+            Triple(
+                list.first().customerName.trim(),
+                list.firstOrNull { it.phoneNumber.isNotBlank() }?.phoneNumber,
+                list.sumOf { it.pendingAmount }
+            )
         }
         .values
-        .maxByOrNull { it.second }
+        .maxByOrNull { it.third }
 
-    val topPendingRecord = groupedByCustomerPending?.first
-    val topPendingAmount = groupedByCustomerPending?.second ?: 0.0
+    val missedDates = if (records.isEmpty()) emptyList() else findMissedNonSundayDates(records)
 
-    if (topPendingRecord != null && topPendingAmount > 0.0) {
-        bullets.add("Highest Pending Customer: ${topPendingRecord.customerName} (₹%.0f pending).".format(topPendingAmount))
-    } else {
-        bullets.add("Highest Pending Customer: None (₹0 pending).")
-    }
-
-    val missingDates = findMissedNonSundayDates(records)
-    if (missingDates.isNotEmpty()) {
-        bullets.add("Data Not Entered Dates (Excl. Sundays): ${missingDates.joinToString(", ")}")
-    } else {
-        bullets.add("Data Not Entered Dates (Excl. Sundays): None — 100% working days logged!")
-    }
-
-    // Build concise action ticker text
-    val reminderParts = mutableListOf<String>()
-    if (missingDates.isNotEmpty()) {
-        reminderParts.add("Missing Logs: ${missingDates.take(5).joinToString(", ")}")
-    }
-    if (topPendingRecord != null && topPendingAmount > 0.0) {
-        reminderParts.add("Follow-up Due: ${topPendingRecord.customerName} (₹%.0f pending)".format(topPendingAmount))
-    }
-    if (reminderParts.isEmpty()) {
-        reminderParts.add("All working days logged • ₹%.0f total pending across ${records.size} entries".format(totalPending))
-    }
-
-    return AiInsightsReport(
-        bullets = bullets,
-        recommendedReminderText = reminderParts.joinToString("   •   "),
-        topPendingRecord = topPendingRecord,
-        topPendingAmount = topPendingAmount,
-        missedDatesDdMmYy = missingDates
+    return AiSummaryAnalysis(
+        scopeDescription = scopeDescription,
+        totalEntries = records.size,
+        totalBilled = totalBilled,
+        totalCollected = totalCollected,
+        totalPending = totalPending,
+        pendingRate = pendingRate,
+        uniqueCustomersCount = distinctCustomers.size,
+        repeatedVisitsList = customerVisits,
+        topPendingCustomer = topPendingEntry?.first,
+        topPendingPhone = topPendingEntry?.second,
+        topPendingAmount = topPendingEntry?.third ?: 0.0,
+        missedDates = missedDates
     )
 }
 
@@ -1084,4 +1162,320 @@ fun DynamicAttendanceCalendar(
                     )
                 }
 
-                Column(horizontalAlignment
+                Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                    Text(
+                        text = monthTitle,
+                        style = MaterialTheme.typography.titleMedium,
+                        fontWeight = FontWeight.Bold
+                    )
+                    Text(
+                        text = "Top-right badge = active associates entered",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
+
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    IconButton(onClick = { monthOffset += 1 }) {
+                        Icon(
+                            imageVector = Icons.AutoMirrored.Filled.KeyboardArrowRight,
+                            contentDescription = "Next Month"
+                        )
+                    }
+                    if (selectedDate != null) {
+                        IconButton(onClick = onClearDate) {
+                            Icon(Icons.Default.Clear, contentDescription = "Clear Date")
+                        }
+                    }
+                }
+            }
+
+            Spacer(modifier = Modifier.height(8.dp))
+
+            Row(modifier = Modifier.fillMaxWidth()) {
+                dayHeaders.forEach { dayName ->
+                    Text(
+                        text = dayName,
+                        modifier = Modifier.weight(1f),
+                        textAlign = TextAlign.Center,
+                        style = MaterialTheme.typography.labelSmall,
+                        fontWeight = FontWeight.Bold,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
+            }
+
+            Spacer(modifier = Modifier.height(6.dp))
+
+            Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                weeks.forEach { week ->
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.spacedBy(4.dp)
+                    ) {
+                        week.forEach { cell ->
+                            if (cell == null) {
+                                Box(modifier = Modifier.weight(1f).height(44.dp))
+                            } else {
+                                val (dayNumber, dateStr) = cell
+                                val count = associateCountByDate[dateStr] ?: 0
+                                val dupStatus = duplicateStatusByDate[dateStr] ?: DuplicateHighlightStatus.NONE
+                                val isSelected = selectedDate == dateStr
+                                val isToday = todayFormatted == dateStr
+
+                                val containerColor = when {
+                                    isSelected -> MaterialTheme.colorScheme.primary
+                                    dupStatus == DuplicateHighlightStatus.MULTIPLE_ASSOCIATES_DUPLICATE -> lightPink
+                                    dupStatus == DuplicateHighlightStatus.SINGLE_ASSOCIATE_DUPLICATE -> lightYellow
+                                    count > 0 -> MaterialTheme.colorScheme.secondaryContainer
+                                    else -> MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.4f)
+                                }
+
+                                val textColor = when {
+                                    isSelected -> MaterialTheme.colorScheme.onPrimary
+                                    dupStatus != DuplicateHighlightStatus.NONE -> Color.Black
+                                    count > 0 -> MaterialTheme.colorScheme.onSecondaryContainer
+                                    else -> MaterialTheme.colorScheme.onSurfaceVariant
+                                }
+
+                                Surface(
+                                    modifier = Modifier
+                                        .weight(1f)
+                                        .height(44.dp)
+                                        .clip(RoundedCornerShape(8.dp))
+                                        .clickable { onDateClick(dateStr) },
+                                    color = containerColor,
+                                    shape = RoundedCornerShape(8.dp),
+                                    border = if (isToday && !isSelected) {
+                                        BorderStroke(1.5.dp, MaterialTheme.colorScheme.primary)
+                                    } else null
+                                ) {
+                                    Box(
+                                        modifier = Modifier
+                                            .fillMaxSize()
+                                            .padding(horizontal = 4.dp, vertical = 2.dp)
+                                    ) {
+                                        Text(
+                                            text = dayNumber.toString(),
+                                            style = MaterialTheme.typography.bodyMedium,
+                                            fontWeight = if (count > 0 || isSelected) FontWeight.Bold else FontWeight.Normal,
+                                            color = textColor,
+                                            modifier = Modifier.align(Alignment.Center)
+                                        )
+
+                                        if (count > 0) {
+                                            Text(
+                                                text = count.toString(),
+                                                style = MaterialTheme.typography.labelSmall.copy(fontSize = 9.sp),
+                                                fontWeight = FontWeight.ExtraBold,
+                                                color = if (isSelected) MaterialTheme.colorScheme.onPrimary else MaterialTheme.colorScheme.primary,
+                                                modifier = Modifier.align(Alignment.TopEnd)
+                                            )
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+
+            Spacer(modifier = Modifier.height(10.dp))
+
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(12.dp),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                LegendIndicator(color = lightYellow, label = "Same Assoc. Duplicate", isLine = false)
+                LegendIndicator(color = lightPink, label = "Multi-Assoc. Duplicate", isLine = false)
+            }
+        }
+    }
+}
+
+@Composable
+fun NotEnteredAssociateCard(associateName: String, date: String) {
+    Card(
+        modifier = Modifier.fillMaxWidth(),
+        colors = CardDefaults.cardColors(
+            containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.65f)
+        ),
+        border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant)
+    ) {
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = 14.dp, vertical = 12.dp),
+            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Icon(
+                    imageVector = Icons.Default.EventBusy,
+                    contentDescription = null,
+                    tint = MaterialTheme.colorScheme.error,
+                    modifier = Modifier.size(20.dp)
+                )
+                Spacer(modifier = Modifier.width(10.dp))
+                Column {
+                    Text(
+                        text = associateName,
+                        style = MaterialTheme.typography.titleSmall,
+                        fontWeight = FontWeight.Bold,
+                        color = MaterialTheme.colorScheme.onSurface
+                    )
+                    Text(
+                        text = "Date: $date",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
+            }
+
+            Box(
+                modifier = Modifier
+                    .background(
+                        color = MaterialTheme.colorScheme.errorContainer,
+                        shape = RoundedCornerShape(6.dp)
+                    )
+                    .padding(horizontal = 10.dp, vertical = 4.dp)
+            ) {
+                Text(
+                    text = "Not Entered",
+                    style = MaterialTheme.typography.labelMedium,
+                    fontWeight = FontWeight.Bold,
+                    color = MaterialTheme.colorScheme.error
+                )
+            }
+        }
+    }
+}
+
+@Composable
+fun RecordItemCard(record: WorkRecord, showEmployee: Boolean) {
+    val context = LocalContext.current
+    val timeFormatter = remember { SimpleDateFormat("hh:mm a", Locale.getDefault()) }
+    val formattedTime = remember(record.timestamp) { timeFormatter.format(Date(record.timestamp)) }
+
+    Card(
+        modifier = Modifier.fillMaxWidth(),
+        elevation = CardDefaults.cardElevation(defaultElevation = 2.dp)
+    ) {
+        Column(modifier = Modifier.padding(14.dp)) {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Text(
+                    text = "${record.workId} • ${record.date}",
+                    style = MaterialTheme.typography.labelLarge,
+                    color = MaterialTheme.colorScheme.primary,
+                    fontWeight = FontWeight.Bold
+                )
+
+                Text(
+                    text = formattedTime,
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    fontWeight = FontWeight.Medium
+                )
+            }
+
+            Spacer(modifier = Modifier.height(4.dp))
+
+            if (showEmployee) {
+                Text(
+                    text = "Associate: ${record.employeeName}",
+                    style = MaterialTheme.typography.labelMedium,
+                    color = MaterialTheme.colorScheme.tertiary,
+                    fontWeight = FontWeight.Bold
+                )
+            }
+
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Text(
+                    text = record.customerName,
+                    style = MaterialTheme.typography.titleMedium,
+                    fontWeight = FontWeight.SemiBold
+                )
+                AssistChip(
+                    onClick = {},
+                    label = { Text("Visits: ${record.visitCount}", style = MaterialTheme.typography.labelSmall) }
+                )
+            }
+
+            Text(
+                text = "${record.activity} | ${record.place}, ${record.district} (${record.pincode})",
+                style = MaterialTheme.typography.bodyMedium,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+
+            Divider(modifier = Modifier.padding(vertical = 8.dp))
+
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Column {
+                    Text(
+                        text = "Total: ₹${record.totalAmount}  |  Adv: ₹${record.advanceAmount}",
+                        style = MaterialTheme.typography.bodySmall
+                    )
+                    Text(
+                        text = "Pending: ₹${record.pendingAmount}",
+                        style = MaterialTheme.typography.bodyMedium,
+                        fontWeight = FontWeight.Bold,
+                        color = if (record.pendingAmount > 0) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.primary
+                    )
+                }
+
+                IconButton(
+                    onClick = {
+                        val intent = Intent(Intent.ACTION_DIAL, Uri.parse("tel:${record.phoneNumber}"))
+                        context.startActivity(intent)
+                    }
+                ) {
+                    Icon(Icons.Default.Call, contentDescription = "Call Customer", tint = MaterialTheme.colorScheme.primary)
+                }
+            }
+        }
+    }
+}
+
+@Composable
+fun DropdownFilterChip(
+    label: String,
+    currentValue: String,
+    options: List<String>,
+    onSelect: (String) -> Unit
+) {
+    var expanded by remember { mutableStateOf(false) }
+
+    Box {
+        FilterChip(
+            selected = currentValue != "All",
+            onClick = { expanded = true },
+            label = {
+                Text(if (currentValue == "All") "$label: All" else "$label: $currentValue")
+            }
+        )
+        DropdownMenu(expanded = expanded, onDismissRequest = { expanded = false }) {
+            options.forEach { opt ->
+                DropdownMenuItem(
+                    text = { Text(opt) },
+                    onClick = {
+                        onSelect(opt)
+                        expanded = false
+                    }
+                )
+            }
+        }
+    }
+}
