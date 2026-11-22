@@ -16,6 +16,7 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.KeyboardArrowLeft
 import androidx.compose.material.icons.automirrored.filled.KeyboardArrowRight
+import androidx.compose.material.icons.filled.AutoAwesome
 import androidx.compose.material.icons.filled.Call
 import androidx.compose.material.icons.filled.Clear
 import androidx.compose.material.icons.filled.EventBusy
@@ -43,6 +44,12 @@ import java.text.SimpleDateFormat
 import java.util.Calendar
 import java.util.Date
 import java.util.Locale
+
+enum class DuplicateHighlightStatus {
+    NONE,
+    SINGLE_ASSOCIATE_DUPLICATE,    // Light Yellow
+    MULTIPLE_ASSOCIATES_DUPLICATE  // Light Pink
+}
 
 data class MonthlyFinancialMetrics(
     val monthYear: String,
@@ -78,7 +85,8 @@ fun DashboardScreen(viewModel: WorkViewModel) {
     val masterWorks by viewModel.masterWorkIds.collectAsState()
     val masterEmps by viewModel.masterEmployees.collectAsState()
 
-    // Month Slicer Options dynamically built from records + current month
+    var showAiSummaryDialog by remember { mutableStateOf(false) }
+
     val monthOptions = remember(allRecords) {
         val currentMonthStr = SimpleDateFormat("MMM-yy", Locale.ENGLISH).format(Calendar.getInstance().time)
         val distinctMonths = (listOf(currentMonthStr) + allRecords.map { extractMonthYear(it.date) })
@@ -91,12 +99,11 @@ fun DashboardScreen(viewModel: WorkViewModel) {
         listOf("All") + tamilNaduPincodeList.map { it.district }.distinct().sorted()
     }
 
-    // Score Card Totals (Total Amount, Pending Amount, % of Pending Amount)
     val totalBilled: Double = visibleRecords.sumOf { it.totalAmount }
     val totalPending: Double = visibleRecords.sumOf { it.pendingAmount }
+    val totalCollected: Double = visibleRecords.sumOf { it.advanceAmount }
     val pendingPercentage: Double = if (totalBilled > 0.0) (totalPending / totalBilled) * 100.0 else 0.0
 
-    // Graph Data: Collected (Light Green), Pending (Light Red), % Pending (Black Line + Dots)
     val monthlyMetrics: List<MonthlyFinancialMetrics> = remember(slicerRecords) {
         slicerRecords.groupBy { record: WorkRecord ->
             extractMonthYear(record.date)
@@ -112,7 +119,7 @@ fun DashboardScreen(viewModel: WorkViewModel) {
                 pendingAmount = pending,
                 pendingPercentage = pct
             )
-        }.reversed() // Chronological left-to-right order
+        }.reversed()
     }
 
     // Distinct associate counts per date for calendar superscripts
@@ -120,6 +127,20 @@ fun DashboardScreen(viewModel: WorkViewModel) {
         slicerRecords.groupBy { it.date }
             .mapValues { (_, list) ->
                 list.map { it.employeeName.trim().lowercase() }.distinct().size
+            }
+    }
+
+    // Duplicate detection per date for calendar cell background highlighting
+    val duplicateStatusByDate: Map<String, DuplicateHighlightStatus> = remember(slicerRecords) {
+        slicerRecords.groupBy { it.date }
+            .mapValues { (_, list) ->
+                val countsPerAssociate = list.groupingBy { it.employeeName.trim().lowercase() }.eachCount()
+                val associatesWithDuplicates = countsPerAssociate.count { it.value > 1 }
+                when {
+                    associatesWithDuplicates > 1 -> DuplicateHighlightStatus.MULTIPLE_ASSOCIATES_DUPLICATE
+                    associatesWithDuplicates == 1 -> DuplicateHighlightStatus.SINGLE_ASSOCIATE_DUPLICATE
+                    else -> DuplicateHighlightStatus.NONE
+                }
             }
     }
 
@@ -162,18 +183,44 @@ fun DashboardScreen(viewModel: WorkViewModel) {
             .padding(16.dp),
         verticalArrangement = Arrangement.spacedBy(14.dp)
     ) {
+        // --- HEADER WITH "AI SUMMARY" BUTTON AT TOP RIGHT ---
         item {
-            Column {
-                Text(
-                    text = if (role == UserRole.ADMIN) "Admin Central Dashboard" else "Dashboard ($loggedInEmp)",
-                    style = MaterialTheme.typography.headlineSmall,
-                    fontWeight = FontWeight.Bold
-                )
-                Text(
-                    text = if (role == UserRole.ADMIN) "All company data & advanced cross-filters" else "Reviewing your field operations",
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant
-                )
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Column(modifier = Modifier.weight(1f)) {
+                    Text(
+                        text = if (role == UserRole.ADMIN) "Admin Central Dashboard" else "Dashboard ($loggedInEmp)",
+                        style = MaterialTheme.typography.headlineSmall,
+                        fontWeight = FontWeight.Bold
+                    )
+                    Text(
+                        text = if (role == UserRole.ADMIN) "All company data & advanced cross-filters" else "Reviewing your field operations",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
+
+                Spacer(modifier = Modifier.width(8.dp))
+
+                FilledTonalButton(
+                    onClick = { showAiSummaryDialog = true },
+                    contentPadding = PaddingValues(horizontal = 12.dp, vertical = 8.dp)
+                ) {
+                    Icon(
+                        imageVector = Icons.Default.AutoAwesome,
+                        contentDescription = "AI Summary",
+                        modifier = Modifier.size(16.dp)
+                    )
+                    Spacer(modifier = Modifier.width(6.dp))
+                    Text(
+                        text = "AI Summary",
+                        style = MaterialTheme.typography.labelMedium,
+                        fontWeight = FontWeight.Bold
+                    )
+                }
             }
         }
 
@@ -189,7 +236,7 @@ fun DashboardScreen(viewModel: WorkViewModel) {
             )
         }
 
-        // Slicer Filters (including Month Slicer)
+        // Slicer Filters
         item {
             Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
                 Row(
@@ -251,7 +298,7 @@ fun DashboardScreen(viewModel: WorkViewModel) {
             }
         }
 
-        // --- 3-PART FINANCIAL SCORE CARD (Total Amount, Pending Amount, % of Pending Amount) ---
+        // 3-Part Financial Score Card
         item {
             Card(
                 modifier = Modifier.fillMaxWidth(),
@@ -271,7 +318,6 @@ fun DashboardScreen(viewModel: WorkViewModel) {
                         horizontalArrangement = Arrangement.SpaceBetween,
                         verticalAlignment = Alignment.CenterVertically
                     ) {
-                        // 1. Total Amount
                         Column(modifier = Modifier.weight(1f)) {
                             Text(
                                 text = "Total Amount",
@@ -286,7 +332,6 @@ fun DashboardScreen(viewModel: WorkViewModel) {
                             )
                         }
 
-                        // 2. Pending Amount
                         Column(
                             modifier = Modifier.weight(1f),
                             horizontalAlignment = Alignment.CenterHorizontally
@@ -304,7 +349,6 @@ fun DashboardScreen(viewModel: WorkViewModel) {
                             )
                         }
 
-                        // 3. % of Pending Amount
                         Column(
                             modifier = Modifier.weight(0.85f),
                             horizontalAlignment = Alignment.End
@@ -326,7 +370,7 @@ fun DashboardScreen(viewModel: WorkViewModel) {
             }
         }
 
-        // --- CLUSTERED COLUMN + LINE COMBO CHART ---
+        // Clustered Column + Line Combo Chart
         item {
             ElevatedCard(modifier = Modifier.fillMaxWidth()) {
                 Column(modifier = Modifier.padding(16.dp)) {
@@ -337,7 +381,6 @@ fun DashboardScreen(viewModel: WorkViewModel) {
                     )
                     Spacer(modifier = Modifier.height(6.dp))
 
-                    // Chart Legend
                     Row(
                         modifier = Modifier.fillMaxWidth(),
                         horizontalArrangement = Arrangement.spacedBy(14.dp),
@@ -363,10 +406,11 @@ fun DashboardScreen(viewModel: WorkViewModel) {
             }
         }
 
-        // --- DYNAMIC CALENDAR WITH FORWARD & BACKWARD BUTTONS ---
+        // --- DYNAMIC CALENDAR WITH DUPLICATE HIGHLIGHTING (LIGHT YELLOW / LIGHT PINK) ---
         item {
             DynamicAttendanceCalendar(
                 associateCountByDate = associateCountByDate,
+                duplicateStatusByDate = duplicateStatusByDate,
                 selectedDate = selectedCalDate,
                 onDateClick = { dateStr -> viewModel.toggleCalendarDate(dateStr) },
                 onClearDate = { viewModel.selectedCalendarDate.value = null }
@@ -427,6 +471,134 @@ fun DashboardScreen(viewModel: WorkViewModel) {
             }
         }
     }
+
+    // --- AI SUMMARY INSIGHTS DIALOG ---
+    if (showAiSummaryDialog) {
+        val insights = remember(
+            visibleRecords,
+            selectedMonth,
+            selectedEmp,
+            selectedDistrict,
+            selectedAct,
+            selectedWorkId,
+            selectedCalDate,
+            duplicateStatusByDate
+        ) {
+            generateAiSlicerInsights(
+                records = visibleRecords,
+                month = selectedMonth,
+                employee = selectedEmp,
+                district = selectedDistrict,
+                activity = selectedAct,
+                workId = selectedWorkId,
+                calendarDate = selectedCalDate,
+                duplicateMap = duplicateStatusByDate
+            )
+        }
+
+        AlertDialog(
+            onDismissRequest = { showAiSummaryDialog = false },
+            icon = { Icon(Icons.Default.AutoAwesome, contentDescription = null, tint = MaterialTheme.colorScheme.primary) },
+            title = { Text("AI Slicer Insights", fontWeight = FontWeight.Bold) },
+            text = {
+                Column(
+                    modifier = Modifier.verticalScroll(rememberScrollState()),
+                    verticalArrangement = Arrangement.spacedBy(10.dp)
+                ) {
+                    insights.forEach { bullet ->
+                        Text(
+                            text = "• $bullet",
+                            style = MaterialTheme.typography.bodyMedium
+                        )
+                    }
+                }
+            },
+            confirmButton = {
+                Button(onClick = { showAiSummaryDialog = false }) {
+                    Text("Close")
+                }
+            }
+        )
+    }
+}
+
+private fun generateAiSlicerInsights(
+    records: List<WorkRecord>,
+    month: String,
+    employee: String,
+    district: String,
+    activity: String,
+    workId: String,
+    calendarDate: String?,
+    duplicateMap: Map<String, DuplicateHighlightStatus>
+): List<String> {
+    val activeFilters = mutableListOf<String>()
+    if (month != "All") activeFilters.add("Month: $month")
+    if (employee != "All") activeFilters.add("Employee: $employee")
+    if (district != "All") activeFilters.add("District: $district")
+    if (activity != "All") activeFilters.add("Activity: $activity")
+    if (workId != "All") activeFilters.add("Work ID: $workId")
+    if (calendarDate != null) activeFilters.add("Date: $calendarDate")
+
+    val filterScope = if (activeFilters.isEmpty()) "All Records (No Active Slicers)" else activeFilters.joinToString(" | ")
+
+    if (records.isEmpty()) {
+        return listOf(
+            "Scope: $filterScope",
+            "No work entries match the currently selected slicers. Try resetting filters or selecting another date."
+        )
+    }
+
+    val insights = mutableListOf<String>()
+    insights.add("Active Scope: $filterScope (${records.size} total entries)")
+
+    val totalBilled = records.sumOf { it.totalAmount }
+    val totalCollected = records.sumOf { it.advanceAmount }
+    val totalPending = records.sumOf { it.pendingAmount }
+    val collectionRate = if (totalBilled > 0) (totalCollected / totalBilled) * 100.0 else 0.0
+    val pendingRate = if (totalBilled > 0) (totalPending / totalBilled) * 100.0 else 0.0
+
+    val healthStatus = when {
+        pendingRate <= 25.0 -> "Healthy cash flow"
+        pendingRate <= 55.0 -> "Moderate receivable backlog"
+        else -> "High pending receivable alert"
+    }
+    insights.add("Financial Health ($healthStatus): ₹%.0f collected (%.1f%%) vs ₹%.0f pending (%.1f%%) out of ₹%.0f total billed.".format(
+        totalCollected, collectionRate, totalPending, pendingRate, totalBilled
+    ))
+
+    val topAssociate = records.groupingBy { it.employeeName }
+        .eachCount()
+        .maxByOrNull { it.value }
+    if (topAssociate != null) {
+        val topAssocRevenue = records.filter { it.employeeName == topAssociate.key }.sumOf { it.totalAmount }
+        insights.add("Top Contributor: ${topAssociate.key} leads with ${topAssociate.value} entries (₹%.0f billed).".format(topAssocRevenue))
+    }
+
+    val topActivity = records.groupingBy { it.activity }
+        .eachCount()
+        .maxByOrNull { it.value }
+    if (topActivity != null) {
+        insights.add("Primary Activity: '${topActivity.key}' accounts for ${topActivity.value} of ${records.size} entries.")
+    }
+
+    val topDistrict = records.filter { it.district.isNotBlank() }
+        .groupingBy { it.district }
+        .eachCount()
+        .maxByOrNull { it.value }
+    if (topDistrict != null) {
+        insights.add("Busiest District: ${topDistrict.key} (${topDistrict.value} site visits).")
+    }
+
+    val singleDupDays = duplicateMap.count { it.value == DuplicateHighlightStatus.SINGLE_ASSOCIATE_DUPLICATE }
+    val multiDupDays = duplicateMap.count { it.value == DuplicateHighlightStatus.MULTIPLE_ASSOCIATES_DUPLICATE }
+    if (singleDupDays > 0 || multiDupDays > 0) {
+        insights.add("Duplicate Entry Alert: $singleDupDays day(s) with single-associate duplicates (Light Yellow) and $multiDupDays day(s) with multi-associate duplicates (Light Pink).")
+    } else {
+        insights.add("Data Integrity: Zero duplicate entries detected across the selected period.")
+    }
+
+    return insights
 }
 
 @Composable
@@ -489,7 +661,6 @@ fun ClusteredCollectionComboChart(data: List<MonthlyFinancialMetrics>) {
             data.forEachIndexed { index, item ->
                 val slotCenter = (index * slotWidth) + (slotWidth / 2f)
 
-                // 1. Collected Column (Light Green - Left of Center)
                 val collectedHeight = ((item.collectedAmount / maxAmount) * drawableHeight).toFloat()
                 val collectedLeft = slotCenter - barWidth - (gapBetweenBars / 2f)
                 drawRoundRect(
@@ -499,7 +670,6 @@ fun ClusteredCollectionComboChart(data: List<MonthlyFinancialMetrics>) {
                     cornerRadius = CornerRadius(4.dp.toPx(), 4.dp.toPx())
                 )
 
-                // 2. Pending Column (Light Red - Right of Center)
                 val pendingHeight = ((item.pendingAmount / maxAmount) * drawableHeight).toFloat()
                 val pendingLeft = slotCenter + (gapBetweenBars / 2f)
                 drawRoundRect(
@@ -509,13 +679,11 @@ fun ClusteredCollectionComboChart(data: List<MonthlyFinancialMetrics>) {
                     cornerRadius = CornerRadius(4.dp.toPx(), 4.dp.toPx())
                 )
 
-                // 3. % Pending Coordinate (0% to 100% scale mapped to drawableHeight)
                 val clampedPct = item.pendingPercentage.coerceIn(0.0, 100.0)
                 val pointY = canvasHeight - ((clampedPct / 100.0) * drawableHeight).toFloat()
                 linePoints.add(Offset(slotCenter, pointY))
             }
 
-            // Draw Black Connecting Line for % Pending
             if (linePoints.size > 1) {
                 val path = Path().apply {
                     moveTo(linePoints.first().x, linePoints.first().y)
@@ -534,7 +702,6 @@ fun ClusteredCollectionComboChart(data: List<MonthlyFinancialMetrics>) {
                 )
             }
 
-            // Draw Filled Dot Markers on every data point
             linePoints.forEach { pt ->
                 drawCircle(
                     color = lineColor,
@@ -546,7 +713,6 @@ fun ClusteredCollectionComboChart(data: List<MonthlyFinancialMetrics>) {
 
         Spacer(modifier = Modifier.height(6.dp))
 
-        // X-Axis Labels & Values per Month
         Row(
             modifier = Modifier.fillMaxWidth(),
             horizontalArrangement = Arrangement.SpaceBetween
@@ -582,11 +748,11 @@ fun ClusteredCollectionComboChart(data: List<MonthlyFinancialMetrics>) {
 @Composable
 fun DynamicAttendanceCalendar(
     associateCountByDate: Map<String, Int>,
+    duplicateStatusByDate: Map<String, DuplicateHighlightStatus>,
     selectedDate: String?,
     onDateClick: (String) -> Unit,
     onClearDate: () -> Unit
 ) {
-    // Track month offset from current month (0 = current month, -1 = previous month, +1 = next month)
     var monthOffset by remember { mutableIntStateOf(0) }
 
     val calendarData = remember(monthOffset) {
@@ -597,7 +763,7 @@ fun DynamicAttendanceCalendar(
         val monthTitle = SimpleDateFormat("MMMM yyyy", Locale.ENGLISH).format(cal.time)
         val dateFormatter = SimpleDateFormat("dd-MMM-yy", Locale.ENGLISH)
 
-        val firstDayOfWeekOffset = cal.get(Calendar.DAY_OF_WEEK) - 1 // 0 = Sun, 6 = Sat
+        val firstDayOfWeekOffset = cal.get(Calendar.DAY_OF_WEEK) - 1
         val daysInMonth = cal.getActualMaximum(Calendar.DAY_OF_MONTH)
 
         val cells = mutableListOf<Pair<Int, String>?>()
@@ -615,9 +781,11 @@ fun DynamicAttendanceCalendar(
     val (monthTitle, weeks, todayFormatted) = calendarData
     val dayHeaders = listOf("Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat")
 
+    val lightYellow = Color(0xFFFFF9C4) // Same associate duplicate
+    val lightPink = Color(0xFFF8BBD0)   // Multiple associates duplicate
+
     ElevatedCard(modifier = Modifier.fillMaxWidth()) {
         Column(modifier = Modifier.padding(16.dp)) {
-            // Month Header with Backward (<) and Forward (>) Buttons
             Row(
                 modifier = Modifier.fillMaxWidth(),
                 horizontalArrangement = Arrangement.SpaceBetween,
@@ -689,6 +857,7 @@ fun DynamicAttendanceCalendar(
                             } else {
                                 val (dayNumber, dateStr) = cell
                                 val count = associateCountByDate[dateStr] ?: 0
+                                val dupStatus = duplicateStatusByDate[dateStr] ?: DuplicateHighlightStatus.NONE
                                 val isSelected = selectedDate == dateStr
                                 val isToday = todayFormatted == dateStr
 
@@ -697,12 +866,15 @@ fun DynamicAttendanceCalendar(
 
                                 val containerColor = when {
                                     isSelected -> MaterialTheme.colorScheme.primary
+                                    dupStatus == DuplicateHighlightStatus.MULTIPLE_ASSOCIATES_DUPLICATE -> lightPink
+                                    dupStatus == DuplicateHighlightStatus.SINGLE_ASSOCIATE_DUPLICATE -> lightYellow
                                     count > 0 -> MaterialTheme.colorScheme.secondaryContainer
                                     else -> MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.4f)
                                 }
 
                                 val textColor = when {
                                     isSelected -> MaterialTheme.colorScheme.onPrimary
+                                    dupStatus != DuplicateHighlightStatus.NONE -> Color.Black
                                     count > 0 -> MaterialTheme.colorScheme.onSecondaryContainer
                                     else -> MaterialTheme.colorScheme.onSurfaceVariant
                                 }
@@ -733,6 +905,18 @@ fun DynamicAttendanceCalendar(
                         }
                     }
                 }
+            }
+
+            Spacer(modifier = Modifier.height(10.dp))
+
+            // Duplicate Highlighting Legend
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(12.dp),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                LegendIndicator(color = lightYellow, label = "Same Assoc. Duplicate", isLine = false)
+                LegendIndicator(color = lightPink, label = "Multi-Assoc. Duplicate", isLine = false)
             }
         }
     }
